@@ -1,5 +1,5 @@
 {
-  "name": "allos-technical-test",
+  "name": "nfe-enrichment-pipeline",
   "version": "1.0.0",
   "private": true,
   "description": "NF-e intake and enrichment pipeline",

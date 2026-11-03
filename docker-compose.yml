@@ -3,7 +3,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?copy .env.example to .env}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?copy .env.example to .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:?copy .env.example to .env}
     volumes:
       - db-data:/var/lib/postgresql/data
@@ -21,8 +21,11 @@ services:
       target: prod
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      WEBHOOK_TOKEN: ${WEBHOOK_TOKEN:?copy .env.example to .env}
+      WEBHOOK_TOKEN: ${WEBHOOK_TOKEN:?set WEBHOOK_TOKEN in .env}
       OUTBOX_RELAY_INTERVAL_MS: ${OUTBOX_RELAY_INTERVAL_MS:-5000}
+      POLL_INTERVAL_MS: ${POLL_INTERVAL_MS:-1000}
+      QUEUE_REDELIVERY_DELAY_MS: ${QUEUE_REDELIVERY_DELAY_MS:-5000}
+      QUEUE_MAX_ATTEMPTS: ${QUEUE_MAX_ATTEMPTS:-5}
     ports:
       - "3000:3000"
     depends_on:

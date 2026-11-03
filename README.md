@@ -9,11 +9,23 @@ O cliente envia a chave de acesso de uma nota fiscal, e o serviço grava a nota 
 Requisito: Docker com Compose.
 
 ```bash
-cp .env.example .env
+cp .env.example .env   # preencha POSTGRES_PASSWORD e WEBHOOK_TOKEN
 docker compose up --build
 ```
 
 A API responde em `http://localhost:3000`, e o PostgreSQL em `localhost:5432`. As migrations rodam ao subir.
+
+O [`.env.example`](.env.example) traz as variáveis do compose.
+
+| Variável | Uso |
+| --- | --- |
+| `POSTGRES_USER`, `POSTGRES_DB` | Usuário e banco do PostgreSQL |
+| `POSTGRES_PASSWORD` | Obrigatória. Senha do PostgreSQL |
+| `WEBHOOK_TOKEN` | Obrigatória. Token esperado no header `x-webhook-token` do webhook |
+| `OUTBOX_RELAY_INTERVAL_MS` | Opcional. Intervalo, em milissegundos, entre os ciclos do relay da outbox. Padrão: `5000` |
+| `POLL_INTERVAL_MS` | Opcional. Intervalo, em milissegundos, entre os ciclos do worker da fila. Padrão: `1000` |
+| `QUEUE_REDELIVERY_DELAY_MS` | Opcional. Espera, em milissegundos, antes de entregar de novo uma mensagem que falhou. Padrão: `5000` |
+| `QUEUE_MAX_ATTEMPTS` | Opcional. Entregas antes de uma mensagem com falha ir para `DEAD`. Padrão: `5` |
 
 ## Como rodar os testes
 
