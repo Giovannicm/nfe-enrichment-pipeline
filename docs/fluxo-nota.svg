@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="745" viewBox="0 0 1200 745" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="seta" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <style>
+      .faixa { fill: #f8fafc; stroke: #cbd5e1; }
+      .titulo { font-size: 13px; font-weight: 700; fill: #475569; letter-spacing: 1px; }
+      .no { fill: #ffffff; stroke: #334155; stroke-width: 1.5; }
+      .dados { fill: #e0f2fe; stroke: #0369a1; stroke-width: 1.5; }
+      .transacao { fill: #fef3c7; stroke: #b45309; stroke-width: 1.5; }
+      .texto { font-size: 15px; fill: #0f172a; text-anchor: middle; }
+      .forte { font-weight: 700; }
+      .detalhe { font-size: 12px; fill: #475569; text-anchor: middle; }
+      .rotulo { font-size: 12px; fill: #334155; text-anchor: middle; }
+      .lateral { font-size: 12px; fill: #334155; }
+      .ida { stroke: #334155; stroke-width: 1.5; fill: none; }
+      .resposta { stroke: #334155; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="745" fill="#ffffff"/>
+
+  <!-- ENTRADA -->
+  <rect class="faixa" x="10" y="10" width="1180" height="150" rx="12"/>
+  <text class="titulo" x="24" y="34">ENTRADA</text>
+
+  <rect class="no" x="40" y="60" width="160" height="56" rx="8"/>
+  <text class="texto" x="120" y="93">Cliente</text>
+
+  <rect class="no" x="400" y="60" width="160" height="56" rx="8"/>
+  <text class="texto" x="480" y="93">API</text>
+
+  <line class="ida" x1="200" y1="78" x2="398" y2="78" marker-end="url(#seta)"/>
+  <text class="rotulo" x="300" y="70">POST /nfes</text>
+  <line class="resposta" x1="400" y1="100" x2="202" y2="100" marker-end="url(#seta)"/>
+  <text class="rotulo" x="300" y="118">201 + nota em ANALISE</text>
+
+  <rect class="transacao" x="760" y="44" width="400" height="92" rx="8"/>
+  <text class="texto forte" x="960" y="70">TRANSAÇÃO</text>
+  <text class="texto" x="960" y="94">cria a nota em ANALISE</text>
+  <text class="texto" x="960" y="116">grava a mensagem de ida na outbox</text>
+  <line class="ida" x1="560" y1="88" x2="758" y2="88" marker-end="url(#seta)"/>
+
+  <!-- PUBLICAÇÃO -->
+  <rect class="faixa" x="10" y="180" width="1180" height="260" rx="12"/>
+  <text class="titulo" x="24" y="204">PUBLICAÇÃO</text>
+
+  <rect class="dados" x="40" y="230" width="160" height="56" rx="8"/>
+  <text class="texto" x="120" y="263">Outbox</text>
+
+  <rect class="no" x="400" y="230" width="160" height="56" rx="8"/>
+  <text class="texto" x="480" y="255">Relay</text>
+  <text class="detalhe" x="480" y="274">ciclos de 1 s</text>
+
+  <rect class="dados" x="760" y="230" width="160" height="56" rx="8"/>
+  <text class="texto" x="840" y="263">Fila</text>
+
+  <line class="ida" x1="200" y1="248" x2="398" y2="248" marker-end="url(#seta)"/>
+  <text class="rotulo" x="300" y="240">lê as linhas pendentes</text>
+  <line class="resposta" x1="400" y1="270" x2="202" y2="270" marker-end="url(#seta)"/>
+  <text class="rotulo" x="300" y="288">marca como publicada</text>
+
+  <line class="ida" x1="560" y1="258" x2="758" y2="258" marker-end="url(#seta)"/>
+  <text class="rotulo" x="660" y="250">publica</text>
+  <text class="rotulo" x="660" y="276">nfe.enrichment.requested</text>
+
+  <rect class="no" x="760" y="350" width="160" height="56" rx="8"/>
+  <text class="texto" x="840" y="383">Worker da fila</text>
+  <line class="ida" x1="840" y1="286" x2="840" y2="348" marker-end="url(#seta)"/>
+  <text class="lateral" x="852" y="322">consome</text>
+
+  <rect class="no" x="400" y="350" width="160" height="56" rx="8"/>
+  <text class="texto" x="480" y="375">Provedor</text>
+  <text class="detalhe" x="480" y="394">(simulado)</text>
+  <line class="ida" x1="760" y1="378" x2="562" y2="378" marker-end="url(#seta)"/>
+  <text class="rotulo" x="660" y="370">chama o provedor</text>
+
+  <!-- RETORNO -->
+  <rect class="faixa" x="10" y="460" width="1180" height="270" rx="12"/>
+  <text class="titulo" x="24" y="484">RETORNO</text>
+
+  <rect class="no" x="40" y="510" width="160" height="56" rx="8"/>
+  <text class="texto" x="120" y="535">Provedor</text>
+  <text class="detalhe" x="120" y="554">(simulado)</text>
+
+  <rect class="no" x="400" y="510" width="160" height="56" rx="8"/>
+  <text class="texto" x="480" y="543">API</text>
+
+  <rect class="dados" x="760" y="510" width="160" height="56" rx="8"/>
+  <text class="texto" x="840" y="543">Fila</text>
+
+  <line class="ida" x1="200" y1="528" x2="398" y2="528" marker-end="url(#seta)"/>
+  <text class="rotulo" x="300" y="520">POST /webhooks/provider</text>
+  <line class="resposta" x1="400" y1="550" x2="202" y2="550" marker-end="url(#seta)"/>
+  <text class="rotulo" x="300" y="568">202</text>
+
+  <line class="ida" x1="560" y1="538" x2="758" y2="538" marker-end="url(#seta)"/>
+  <text class="rotulo" x="660" y="530">publica</text>
+  <text class="rotulo" x="660" y="556">nfe.enrichment.result</text>
+
+  <rect class="no" x="760" y="630" width="160" height="56" rx="8"/>
+  <text class="texto" x="840" y="663">Worker da fila</text>
+  <line class="ida" x1="840" y1="566" x2="840" y2="628" marker-end="url(#seta)"/>
+  <text class="lateral" x="852" y="602">consome</text>
+
+  <rect class="transacao" x="280" y="616" width="280" height="92" rx="8"/>
+  <text class="texto forte" x="420" y="642">TRANSAÇÃO</text>
+  <text class="texto" x="420" y="666">decide o status da nota</text>
+  <text class="texto" x="420" y="688">grava APROVADA ou REJEITADA</text>
+  <line class="ida" x1="760" y1="658" x2="562" y2="658" marker-end="url(#seta)"/>
+</svg>
