@@ -27,9 +27,21 @@ export class NfesConsumers implements OnModuleInit {
 
   private async applyResult(payload: unknown, manager: EntityManager): Promise<CommittedLog> {
     const result = readResult(payload);
+    const { accessKey } = result;
+    // The lock makes concurrent deliveries of a result wait, so the NFe is decided only once.
+    const [nfe]: Array<{ id: string; status: string }> = await manager.query(
+      'SELECT id, status FROM nfes WHERE access_key = $1 FOR UPDATE',
+      [accessKey],
+    );
+    if (!nfe) {
+      return { event: 'result.ignored_unknown_key', accessKey };
+    }
+    if (nfe.status !== 'ANALISE') {
+      return { event: 'result.ignored_already_decided', nfeId: nfe.id, accessKey, currentStatus: nfe.status };
+    }
+
     const evaluation = evaluateResult(result);
-    // The ANALISE condition makes redelivery harmless, even when concurrent.
-    const [rows, updated]: [Array<{ id: string }>, number] = await manager.query(
+    await manager.query(
       `UPDATE nfes
           SET status = $2,
               cnpj = $3,
@@ -39,10 +51,9 @@ export class NfesConsumers implements OnModuleInit {
               rejection_reason = $7,
               approved_at = CASE WHEN $2 = 'APROVADA' THEN now() END,
               updated_at = now()
-        WHERE access_key = $1 AND status = 'ANALISE'
-        RETURNING id`,
+        WHERE id = $1`,
       [
-        result.accessKey,
+        nfe.id,
         evaluation.status,
         evaluation.cnpj,
         evaluation.amount,
@@ -51,17 +62,7 @@ export class NfesConsumers implements OnModuleInit {
         evaluation.reason,
       ],
     );
-    const { accessKey } = result;
-    if (updated === 0) {
-      const [existing]: Array<{ id: string; status: string }> = await manager.query(
-        'SELECT id, status FROM nfes WHERE access_key = $1',
-        [accessKey],
-      );
-      return existing
-        ? { event: 'result.ignored_already_decided', nfeId: existing.id, accessKey, currentStatus: existing.status }
-        : { event: 'result.ignored_unknown_key', accessKey };
-    }
-    const nfeId = rows[0].id;
+    const nfeId = nfe.id;
     return evaluation.status === 'APROVADA'
       ? { event: 'nfe.approved', nfeId, accessKey }
       : { event: 'nfe.rejected', nfeId, accessKey, reason: evaluation.reason };

@@ -1,10 +1,11 @@
 import { INestApplication, Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { getDataSourceToken } from '@nestjs/typeorm';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import request from 'supertest';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { TOPIC_ENRICHMENT, TOPIC_RESULT } from '../src/nfes/contracts';
+import { Nfe } from '../src/nfes/nfe.entity';
 import { ProviderClient } from '../src/provider/provider.client';
 import { MessageBus } from '../src/queue/message-bus';
 import { OutboxRelay } from '../src/queue/outbox-relay';
@@ -187,23 +188,23 @@ describe('NFe pipeline (e2e)', () => {
   });
 
   describe('two requests with the same key', () => {
-    it('two sequential requests create one NFe, one outbox entry and one provider call', async () => {
+    it('a repeated key answers 409 with the existing id, and creates nothing new', async () => {
       const first = await postNfe().expect(201);
       await runJobs();
-      const second = await postNfe().expect(200);
+      const second = await postNfe().expect(409);
       await runJobs();
 
-      expect(second.body.id).toBe(first.body.id);
+      expect(second.body).toMatchObject({ statusCode: 409, nfeId: first.body.id });
       expect(await countNfes()).toBe(1);
       expect(await outboxEntries()).toHaveLength(1);
       expect(provider.requests).toHaveLength(1);
     });
 
-    it('simultaneous requests create one NFe: one answers 201 and the others 200', async () => {
+    it('simultaneous requests create one NFe: one answers 201 and the others 409', async () => {
       const responses = await Promise.all([postNfe(), postNfe(), postNfe(), postNfe()]);
 
-      expect(responses.map((r) => r.status).sort()).toEqual([200, 200, 200, 201]);
-      expect(new Set(responses.map((r) => r.body.id)).size).toBe(1);
+      expect(responses.map((r) => r.status).sort()).toEqual([201, 409, 409, 409]);
+      expect(new Set(responses.map((r) => r.body.id ?? r.body.nfeId)).size).toBe(1);
       expect(await countNfes()).toBe(1);
       expect(await outboxEntries()).toHaveLength(1);
 
@@ -211,16 +212,27 @@ describe('NFe pipeline (e2e)', () => {
       expect(provider.requests).toHaveLength(1);
     });
 
-    it('a second request returns an NFe already decided, without reopening it', async () => {
+    it('a key stored between the lookup and the insert still answers 409, not 503', async () => {
+      const first = await postNfe().expect(201);
+      // Simulates the race: the lookup misses the NFe that another request has just stored.
+      jest.spyOn(app.get(getRepositoryToken(Nfe)), 'findOneBy').mockResolvedValueOnce(null);
+
+      const second = await postNfe().expect(409);
+
+      expect(second.body).toMatchObject({ statusCode: 409, nfeId: first.body.id });
+      expect(await countNfes()).toBe(1);
+      expect(await outboxEntries()).toHaveLength(1);
+    });
+
+    it('a repeated key does not reopen an NFe already decided', async () => {
       const id = await createNfe();
       await providerReturns(completeResult).expect(202);
       await runJobs();
       const before = (await getNfe(id)).body;
 
-      const second = await postNfe().expect(200);
+      await postNfe().expect(409);
       await runJobs();
 
-      expect(second.body).toEqual(before);
       expect((await getNfe(id)).body).toEqual(before);
       expect(provider.requests).toHaveLength(1);
     });
@@ -322,6 +334,24 @@ describe('NFe pipeline (e2e)', () => {
       const nfe = (await getNfe(id)).body;
       expect(nfe.status).toBe('APROVADA');
       expect(nfe.updatedAt).toBe(nfe.approvedAt);
+    });
+
+    it('simultaneous divergent results decide the NFe only once', async () => {
+      const decisions: unknown[] = [];
+      jest.spyOn(Logger.prototype, 'log').mockImplementation((...args: unknown[]) => {
+        const event = (args[0] as { event?: string } | undefined)?.event;
+        if (event === 'nfe.approved' || event === 'nfe.rejected' || event === 'result.ignored_already_decided') {
+          decisions.push(event);
+        }
+      });
+      await createNfe();
+      await providerReturns(completeResult).expect(202);
+      await providerReturns({ ...completeResult, cancelled: true }).expect(202);
+
+      await Promise.all([worker.runCycle(), worker.runCycle()]);
+
+      expect(decisions).toHaveLength(2);
+      expect(decisions).toContain('result.ignored_already_decided');
     });
 
     it('a divergent result after the decision is ignored', async () => {
@@ -525,7 +555,7 @@ describe('NFe pipeline (e2e)', () => {
       await createNfe();
       const entries = captureLogs();
 
-      await postNfe().expect(200);
+      await postNfe().expect(409);
       await providerReturns({ ...completeResult, cnpj: undefined }).expect(202);
       await runJobs();
 

@@ -1,7 +1,7 @@
-import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import { MessageBus } from '../queue/message-bus';
 import { addToOutbox } from '../queue/outbox-relay';
 import { errorMessage } from '../queue/polling';
@@ -18,30 +18,32 @@ export class NfesService {
     @InjectRepository(Nfe) private readonly nfes: Repository<Nfe>,
   ) {}
 
-  /** Stores the NFe and its outbound message atomically. A repeated key changes nothing. */
-  async create(accessKey: string): Promise<{ nfe: Nfe; created: boolean }> {
+  /** Creates the NFe with its outbound message, or refuses with 409 when the key was already received. */
+  async create(accessKey: string): Promise<Nfe> {
+    const existing = await this.nfes.findOneBy({ accessKey });
+    if (existing) {
+      throw this.conflict(existing.id, accessKey);
+    }
+
+    const id = randomUUID();
     try {
-      const created = await this.dataSource.transaction(async (manager) => {
-        const inserted: Array<{ id: string }> = await manager.query(
-          `INSERT INTO nfes (id, access_key) VALUES ($1, $2)
-           ON CONFLICT (access_key) DO NOTHING
-           RETURNING id`,
-          [randomUUID(), accessKey],
-        );
-        if (inserted.length === 0) {
-          return false;
-        }
-        const request: EnrichmentRequest = { nfeId: inserted[0].id, accessKey };
+      await this.dataSource.transaction(async (manager) => {
+        await manager.query('INSERT INTO nfes (id, access_key) VALUES ($1, $2)', [id, accessKey]);
+        const request: EnrichmentRequest = { nfeId: id, accessKey };
         await addToOutbox(manager, TOPIC_ENRICHMENT, request);
-        return true;
       });
-      const nfe = await this.nfes.findOneByOrFail({ accessKey });
-      this.logger.log({ event: created ? 'nfe.created' : 'nfe.duplicate_request', nfeId: nfe.id, accessKey });
-      return { nfe, created };
     } catch (error) {
+      if (isUniqueViolation(error)) {
+        // A simultaneous request stored the same key between the lookup and the insert.
+        const winner = await this.nfes.findOneByOrFail({ accessKey });
+        throw this.conflict(winner.id, accessKey);
+      }
       this.logger.error({ event: 'nfe.create_failed', accessKey, error: errorMessage(error) });
       throw new ServiceUnavailableException('Could not store the NFe. Please try again.');
     }
+
+    this.logger.log({ event: 'nfe.created', nfeId: id, accessKey });
+    return this.nfes.findOneByOrFail({ id });
   }
 
   async receiveResult(result: EnrichmentResult): Promise<void> {
@@ -57,4 +59,18 @@ export class NfesService {
   find(id: string): Promise<Nfe | null> {
     return this.nfes.findOneBy({ id });
   }
+
+  private conflict(nfeId: string, accessKey: string): ConflictException {
+    this.logger.warn({ event: 'nfe.duplicate_request', nfeId, accessKey });
+    return new ConflictException({
+      statusCode: 409,
+      error: 'Conflict',
+      message: 'An NFe with this access key already exists',
+      nfeId,
+    });
+  }
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return error instanceof QueryFailedError && (error.driverError as { code?: string }).code === '23505';
 }

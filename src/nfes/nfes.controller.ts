@@ -1,16 +1,4 @@
-import {
-  Body,
-  Controller,
-  Get,
-  HttpCode,
-  NotFoundException,
-  Param,
-  ParseUUIDPipe,
-  Post,
-  Res,
-  UseGuards,
-} from '@nestjs/common';
-import { Response } from 'express';
+import { Body, Controller, Get, HttpCode, NotFoundException, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
 import { Nfe } from './nfe.entity';
 import { CreateNfeDto, EnrichmentResultDto } from './nfes.dto';
 import { NfesService } from './nfes.service';
@@ -21,10 +9,8 @@ export class NfesController {
   constructor(private readonly nfes: NfesService) {}
 
   @Post('nfes')
-  async create(@Body() body: CreateNfeDto, @Res({ passthrough: true }) response: Response): Promise<Nfe> {
-    const { nfe, created } = await this.nfes.create(body.accessKey);
-    response.status(created ? 201 : 200);
-    return nfe;
+  create(@Body() body: CreateNfeDto): Promise<Nfe> {
+    return this.nfes.create(body.accessKey);
   }
 
   @Get('nfes/:id')
