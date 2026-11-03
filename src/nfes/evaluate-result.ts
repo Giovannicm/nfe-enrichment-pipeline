@@ -1,3 +1,5 @@
+import { plainToInstance } from 'class-transformer';
+import { IsBoolean, IsISO8601, Matches, validateSync } from 'class-validator';
 import { EnrichmentResult } from './contracts';
 
 export interface ResultEvaluation {
@@ -9,51 +11,53 @@ export interface ResultEvaluation {
   cancelled: boolean | null;
 }
 
-const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2}))?$/;
+/** What a result needs to approve the NFe. A field that breaks its rule counts as missing. */
+class ResultData {
+  @Matches(/^\d{14}$/)
+  cnpj!: string;
+
+  @Matches(/^\d{1,13}(\.\d{1,2})?$/)
+  amount!: string;
+
+  // Strict ISO 8601 refuses dates missing from the calendar, such as Feb 31. The pattern refuses
+  // ISO forms without a full date, such as "2026" or week dates, and times without minutes.
+  @IsISO8601({ strict: true, strictSeparator: true })
+  @Matches(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}|$)/)
+  issueDate!: string;
+
+  @IsBoolean()
+  cancelled!: boolean;
+}
+
+const FIELDS = ['cnpj', 'amount', 'issueDate', 'cancelled'] as const;
 
 /** Pure decision rule. Only `cancelled === false` with all data valid approves. */
 export function evaluateResult(result: EnrichmentResult): ResultEvaluation {
-  const cnpj = readCnpj(result.cnpj);
-  const amount = readAmount(result.amount);
-  const issueDate = readDate(result.issueDate);
-  const cancelled = typeof result.cancelled === 'boolean' ? result.cancelled : null;
-  const data = { cnpj, amount, issueDate, cancelled };
+  const data = plainToInstance(ResultData, {
+    cnpj: result.cnpj,
+    amount: result.amount,
+    issueDate: result.issueDate,
+    cancelled: result.cancelled,
+  });
+  const invalid = new Set(validateSync(data).map((error) => error.property));
+  const valid = <Field extends (typeof FIELDS)[number]>(field: Field): ResultData[Field] | null =>
+    invalid.has(field) ? null : data[field];
 
-  if (cancelled === true) {
-    return { status: 'REJEITADA', reason: 'NFe cancelled', ...data };
+  const issueDate = valid('issueDate');
+  const fields = {
+    cnpj: valid('cnpj'),
+    amount: valid('amount'),
+    issueDate: issueDate === null ? null : new Date(issueDate).toISOString(),
+    cancelled: valid('cancelled'),
+  };
+
+  if (fields.cancelled === true) {
+    return { status: 'REJEITADA', reason: 'NFe cancelled', ...fields };
   }
 
-  const missing = Object.entries(data)
-    .filter(([, content]) => content === null)
-    .map(([field]) => field);
-
+  const missing = FIELDS.filter((field) => fields[field] === null);
   if (missing.length > 0) {
-    return { status: 'REJEITADA', reason: `Missing or invalid data: ${missing.join(', ')}`, ...data };
+    return { status: 'REJEITADA', reason: `Missing or invalid data: ${missing.join(', ')}`, ...fields };
   }
-  return { status: 'APROVADA', reason: null, ...data };
-}
-
-function readCnpj(cnpj: unknown): string | null {
-  return typeof cnpj === 'string' && /^\d{14}$/.test(cnpj) ? cnpj : null;
-}
-
-function readAmount(amount: unknown): string | null {
-  return typeof amount === 'string' && /^\d{1,13}(\.\d{1,2})?$/.test(amount) ? amount : null;
-}
-
-function readDate(date: unknown): string | null {
-  if (typeof date !== 'string') {
-    return null;
-  }
-  const parts = ISO_DATE.exec(date);
-  const instant = new Date(date);
-  if (!parts || Number.isNaN(instant.getTime())) {
-    return null;
-  }
-  // The JS parser may accept Feb 31 and roll over to March; the date must exist in the calendar.
-  const [year, month, day] = parts.slice(1, 4).map(Number);
-  const calendar = new Date(Date.UTC(year, month - 1, day));
-  const exists =
-    calendar.getUTCFullYear() === year && calendar.getUTCMonth() === month - 1 && calendar.getUTCDate() === day;
-  return exists ? instant.toISOString() : null;
+  return { status: 'APROVADA', reason: null, ...fields };
 }

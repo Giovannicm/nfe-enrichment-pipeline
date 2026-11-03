@@ -1,9 +1,12 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { ClassConstructor, plainToInstance } from 'class-transformer';
+import { isObject, validateSync } from 'class-validator';
 import { EntityManager } from 'typeorm';
 import { ProviderClient } from '../provider/provider.client';
 import { CommittedLog, InvalidMessageError, QueueWorker } from '../queue/queue-worker';
-import { EnrichmentRequest, EnrichmentResult, isValidAccessKey, TOPIC_ENRICHMENT, TOPIC_RESULT } from './contracts';
+import { EnrichmentRequest, EnrichmentResult, TOPIC_ENRICHMENT, TOPIC_RESULT } from './contracts';
 import { evaluateResult } from './evaluate-result';
+import { EnrichmentRequestDto, EnrichmentResultDto } from './nfes.dto';
 
 @Injectable()
 export class NfesConsumers implements OnModuleInit {
@@ -70,16 +73,25 @@ export class NfesConsumers implements OnModuleInit {
 }
 
 function readRequest(payload: unknown): EnrichmentRequest {
-  const { nfeId, accessKey } = (payload ?? {}) as Partial<EnrichmentRequest>;
-  if (typeof nfeId !== 'string' || !isValidAccessKey(accessKey)) {
-    throw new InvalidMessageError('Message breaks the contract: invalid nfeId or accessKey');
-  }
+  const { nfeId, accessKey } = readMessage(EnrichmentRequestDto, payload);
   return { nfeId, accessKey };
 }
 
 function readResult(payload: unknown): EnrichmentResult {
-  if (!isValidAccessKey((payload as Partial<EnrichmentResult> | null)?.accessKey)) {
-    throw new InvalidMessageError('Message breaks the contract: invalid accessKey');
+  return readMessage(EnrichmentResultDto, payload);
+}
+
+/** A message that breaks its contract can never be processed, so it goes straight to DEAD. */
+function readMessage<T extends object>(type: ClassConstructor<T>, payload: unknown): T {
+  if (!isObject(payload)) {
+    throw new InvalidMessageError('Message breaks the contract: payload is not an object');
   }
-  return payload as EnrichmentResult;
+  const message = plainToInstance(type, payload);
+  const errors = validateSync(message);
+  if (errors.length > 0) {
+    throw new InvalidMessageError(
+      `Message breaks the contract: invalid ${errors.map((error) => error.property).join(', ')}`,
+    );
+  }
+  return message;
 }

@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { isString } from 'class-validator';
 import { numericEnv } from '../config';
 
 /** Repeats a cycle on an interval, skipping a tick while the previous cycle is still running. */
@@ -22,7 +23,7 @@ export class PollingLoop {
       this.currentCycle = this.cycle()
         .catch((error) => this.logger.error({ event: 'polling.cycle_failed', error: errorMessage(error) }))
         .finally(() => (this.currentCycle = undefined));
-    }, numericEnv('POLL_INTERVAL_MS', 1000));
+    }, numericEnv('POLL_INTERVAL_MS', 1000, 1));
   }
 
   async stop(): Promise<void> {
@@ -38,5 +39,5 @@ export function errorMessage(error: unknown): string {
 /** Correlates a message with its NFe in the logs, without exposing the rest of the payload. */
 export function accessKeyOf(payload: unknown): string | undefined {
   const accessKey = (payload as { accessKey?: unknown } | null)?.accessKey;
-  return typeof accessKey === 'string' ? accessKey : undefined;
+  return isString(accessKey) ? accessKey : undefined;
 }

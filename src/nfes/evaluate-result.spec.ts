@@ -59,7 +59,13 @@ describe('evaluateResult', () => {
     ['issueDate', ''],
     ['issueDate', 'yesterday'],
     ['issueDate', '2026-02-31'],
+    ['issueDate', '2026-02-29'],
     ['issueDate', '2026-13-01T00:00:00Z'],
+    ['issueDate', '2026'],
+    ['issueDate', '2026-W43'],
+    ['issueDate', '2026-10-30T12'],
+    ['issueDate', '2026-10-30 12:00:00Z'],
+    ['issueDate', 20261030],
     ['cancelled', 'false'],
     ['cancelled', null],
   ])('rejects when %s is %j', (field, content) => {

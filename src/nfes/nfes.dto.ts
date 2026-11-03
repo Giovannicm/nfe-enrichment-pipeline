@@ -1,9 +1,18 @@
-import { Allow, Matches } from 'class-validator';
-import { ACCESS_KEY_PATTERN, EnrichmentResult } from './contracts';
+import { Allow, IsUUID, Matches } from 'class-validator';
+import { ACCESS_KEY_PATTERN, EnrichmentRequest, EnrichmentResult } from './contracts';
 
 const ACCESS_KEY_MESSAGE = 'accessKey must have 44 numeric digits';
 
 export class CreateNfeDto {
+  @Matches(ACCESS_KEY_PATTERN, { message: ACCESS_KEY_MESSAGE })
+  accessKey!: string;
+}
+
+/** Outbound message, validated when it is consumed from the queue. */
+export class EnrichmentRequestDto implements EnrichmentRequest {
+  @IsUUID()
+  nfeId!: string;
+
   @Matches(ACCESS_KEY_PATTERN, { message: ACCESS_KEY_MESSAGE })
   accessKey!: string;
 }
@@ -28,4 +37,3 @@ export class EnrichmentResultDto implements EnrichmentResult {
   @Allow()
   cancelled?: unknown;
 }
-''

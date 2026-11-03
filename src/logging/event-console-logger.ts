@@ -1,4 +1,5 @@
 import { ConsoleLogger, LogLevel } from '@nestjs/common';
+import { isString } from 'class-validator';
 
 /** Keeps Nest's default layout, printing each event on one line: `nfe.created nfeId=... accessKey=...`. */
 export class EventConsoleLogger extends ConsoleLogger {
@@ -15,9 +16,9 @@ export function formatEvent({ event, ...fields }: { event: string; [field: strin
 }
 
 function formatValue(value: unknown): string {
-  return typeof value === 'string' && !value.includes(' ') ? value : JSON.stringify(value);
+  return isString(value) && !value.includes(' ') ? value : JSON.stringify(value);
 }
 
 function isEvent(message: unknown): message is { event: string } {
-  return typeof (message as { event?: unknown } | null)?.event === 'string';
+  return isString((message as { event?: unknown } | null)?.event);
 }

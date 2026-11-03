@@ -299,6 +299,23 @@ describe('NFe pipeline (e2e)', () => {
       expect(inbound.status).toBe('PROCESSED');
     });
 
+    it('a queued message that is not an object goes DEAD at the first attempt', async () => {
+      await bus.publish(TOPIC_RESULT, null as unknown as object);
+      await worker.runCycle();
+
+      const [dead] = await messages(TOPIC_RESULT);
+      expect(dead).toMatchObject({ status: 'DEAD', attempts: 1 });
+    });
+
+    it('a queued outbound message with an invalid NFe id goes DEAD, without calling the provider', async () => {
+      await bus.publish(TOPIC_ENRICHMENT, { nfeId: 'not-a-uuid', accessKey: ACCESS_KEY });
+      await worker.runCycle();
+
+      const [dead] = await messages(TOPIC_ENRICHMENT);
+      expect(dead).toMatchObject({ status: 'DEAD', attempts: 1 });
+      expect(provider.requests).toEqual([]);
+    });
+
     it('a queued message without a valid key goes DEAD, with no redelivery and no NFe change', async () => {
       const id = await createNfe();
       await bus.publish(TOPIC_RESULT, { cnpj: '12345678000190' });

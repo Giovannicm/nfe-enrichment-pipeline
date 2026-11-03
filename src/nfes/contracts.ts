@@ -17,7 +17,3 @@ export interface EnrichmentResult {
 }
 
 export const ACCESS_KEY_PATTERN = /^\d{44}$/;
-
-export function isValidAccessKey(key: unknown): key is string {
-  return typeof key === 'string' && ACCESS_KEY_PATTERN.test(key);
-}

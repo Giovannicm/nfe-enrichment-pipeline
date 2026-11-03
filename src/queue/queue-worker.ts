@@ -26,7 +26,7 @@ interface QueueMessage {
 export class QueueWorker implements OnApplicationBootstrap, OnApplicationShutdown {
   private readonly logger = new Logger(QueueWorker.name);
   private readonly handlers = new Map<string, MessageHandler>();
-  private readonly maxAttempts = numericEnv('QUEUE_MAX_ATTEMPTS', 5);
+  private readonly maxAttempts = numericEnv('QUEUE_MAX_ATTEMPTS', 5, 1);
   private readonly redeliveryDelayMs = numericEnv('QUEUE_REDELIVERY_DELAY_MS', 5000);
   private readonly polling = new PollingLoop(() => this.runCycle(), this.logger);
 
