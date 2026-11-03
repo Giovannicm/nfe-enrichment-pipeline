@@ -4,11 +4,20 @@ import { databaseOptions } from '../src/database/database.config';
 describe('Migrations', () => {
   const dataSource = new DataSource(databaseOptions());
 
+  /** Application tables that exist right now, read through the TypeORM query runner. */
   const tables = async (): Promise<string[]> => {
-    const rows: Array<{ tablename: string }> = await dataSource.query(
-      `SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'migrations' ORDER BY tablename`,
-    );
-    return rows.map((row) => row.tablename);
+    const queryRunner = dataSource.createQueryRunner();
+    try {
+      const existing: string[] = [];
+      for (const table of ['nfes', 'outbox', 'queue_messages']) {
+        if (await queryRunner.hasTable(table)) {
+          existing.push(table);
+        }
+      }
+      return existing;
+    } finally {
+      await queryRunner.release();
+    }
   };
 
   beforeAll(async () => {

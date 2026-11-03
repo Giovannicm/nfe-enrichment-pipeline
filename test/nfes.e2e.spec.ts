@@ -2,13 +2,15 @@ import { INestApplication, Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import request from 'supertest';
-import { DataSource } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { TOPIC_ENRICHMENT, TOPIC_RESULT } from '../src/nfes/contracts';
 import { Nfe } from '../src/nfes/nfe.entity';
+import { OutboxEntry } from '../src/outbox/outbox-entry.entity';
 import { OutboxRelay } from '../src/outbox/outbox-relay';
 import { ProviderClient } from '../src/provider/provider.client';
 import { MessageBus } from '../src/queue/message-bus';
+import { QueueMessage } from '../src/queue/queue-message.entity';
 import { QueueWorker } from '../src/queue/queue-worker';
 import { FakeProvider } from './support/fake-provider';
 
@@ -26,6 +28,9 @@ const completeResult = {
 describe('NFe pipeline (e2e)', () => {
   let app: INestApplication;
   let dataSource: DataSource;
+  let nfeRepository: Repository<Nfe>;
+  let outboxRepository: Repository<OutboxEntry>;
+  let queueRepository: Repository<QueueMessage>;
   let worker: QueueWorker;
   let relay: OutboxRelay;
   let bus: MessageBus;
@@ -40,13 +45,18 @@ describe('NFe pipeline (e2e)', () => {
     app.useLogger(false);
     await app.init();
     dataSource = app.get(getDataSourceToken());
+    nfeRepository = app.get(getRepositoryToken(Nfe));
+    outboxRepository = app.get(getRepositoryToken(OutboxEntry));
+    queueRepository = app.get(getRepositoryToken(QueueMessage));
     worker = app.get(QueueWorker);
     relay = app.get(OutboxRelay);
     bus = app.get(MessageBus);
   });
 
   beforeEach(async () => {
-    await dataSource.query('TRUNCATE nfes, outbox, queue_messages');
+    for (const repository of [nfeRepository, outboxRepository, queueRepository]) {
+      await repository.clear();
+    }
     provider.reset();
     jest.restoreAllMocks();
   });
@@ -63,14 +73,12 @@ describe('NFe pipeline (e2e)', () => {
 
   const getNfe = (id: string) => request(app.getHttpServer()).get(`/nfes/${id}`);
 
-  const countNfes = async (): Promise<number> => (await dataSource.query('SELECT count(*)::int AS n FROM nfes'))[0].n;
+  const countNfes = (): Promise<number> => nfeRepository.count();
 
-  const outboxEntries = (): Promise<
-    Array<{ topic: string; payload: object; attempts: number; last_error: string | null; published_at: Date | null }>
-  > => dataSource.query('SELECT topic, payload, attempts, last_error, published_at FROM outbox ORDER BY id');
+  const outboxEntries = (): Promise<OutboxEntry[]> => outboxRepository.find({ order: { id: 'ASC' } });
 
-  const messages = (topic: string): Promise<Array<{ payload: object; status: string; attempts: number }>> =>
-    dataSource.query('SELECT payload, status, attempts FROM queue_messages WHERE topic = $1 ORDER BY id', [topic]);
+  const messages = (topic: string): Promise<QueueMessage[]> =>
+    queueRepository.find({ where: { topic }, order: { id: 'ASC' } });
 
   /** Runs the background jobs: the relay publishes, then the worker consumes. */
   const runJobs = async (): Promise<void> => {
@@ -121,7 +129,7 @@ describe('NFe pipeline (e2e)', () => {
       expect(entries[0]).toMatchObject({
         topic: TOPIC_ENRICHMENT,
         payload: { nfeId: id, accessKey: ACCESS_KEY },
-        published_at: null,
+        publishedAt: null,
       });
       expect(await messages(TOPIC_ENRICHMENT)).toHaveLength(0);
     });
@@ -131,7 +139,7 @@ describe('NFe pipeline (e2e)', () => {
 
       await relay.runCycle();
 
-      expect((await outboxEntries())[0].published_at).not.toBeNull();
+      expect((await outboxEntries())[0].publishedAt).not.toBeNull();
       const [published] = await messages(TOPIC_ENRICHMENT);
       expect(published).toMatchObject({ payload: { nfeId: id, accessKey: ACCESS_KEY }, status: 'PENDING' });
       expect(provider.requests).toEqual([]);
@@ -413,12 +421,12 @@ describe('NFe pipeline (e2e)', () => {
 
       expect((await getNfe(id)).body).toMatchObject({ status: 'ANALISE', approvedAt: null });
       expect(await messages(TOPIC_ENRICHMENT)).toHaveLength(0);
-      expect((await outboxEntries())[0]).toMatchObject({ attempts: 1, last_error: 'queue down', published_at: null });
+      expect((await outboxEntries())[0]).toMatchObject({ attempts: 1, lastError: 'queue down', publishedAt: null });
 
       await relay.runCycle();
 
       expect((await outboxEntries())[0]).toMatchObject({ attempts: 2 });
-      expect((await outboxEntries())[0].published_at).not.toBeNull();
+      expect((await outboxEntries())[0].publishedAt).not.toBeNull();
       expect(await messages(TOPIC_ENRICHMENT)).toHaveLength(1);
       expect((await getNfe(id)).body.status).toBe('ANALISE');
     });

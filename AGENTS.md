@@ -77,7 +77,7 @@ Constraints na tabela `nfes`: `approved_at_only_when_approved`, `reason_only_whe
 - **Mensagens da fila:** são validadas ao consumir. Payload fora do contrato gera `InvalidMessageError` e vai direto para `DEAD`, sem nova tentativa.
 - **Handlers da fila** recebem o `EntityManager` da transação do worker. Faça toda escrita por ele e retorne um `CommittedLog`, que só é logado depois do commit. Handlers precisam ser idempotentes: a entrega é *at-least-once*.
 - **Outbox:** qualquer mensagem gerada por uma mudança de dados usa `Outbox.add(manager, ...)` dentro da mesma transação. Não publique direto no `MessageBus` a partir de um fluxo de escrita de negócio.
-- **Acesso a dados:** use repositórios injetados com `@InjectRepository` e grave com `save`, sem `manager.query`. Dentro de uma transação, use `manager.withRepository(this.repo)`. Os locks usam `findOne({ lock: { mode: 'pessimistic_write', onLocked: 'skip_locked' } })`. SQL escrito à mão fica só nas migrations.
+- **Acesso a dados:** use repositórios injetados com `@InjectRepository` e grave com `save`, sem `manager.query`. Dentro de uma transação, use `manager.withRepository(this.repo)`. Os locks usam `findOne({ lock: { mode: 'pessimistic_write', onLocked: 'skip_locked' } })`. SQL escrito à mão fica só nas migrations e no helper `withFailingTrigger` dos testes, que cria um trigger para simular falha dentro da transação.
 - **Saves parciais:** para atualizar, passe `{ id, ...campos }` ao `save`, em vez de alterar a entidade carregada. Assim, um caminho de falha não grava por engano um campo alterado antes do rollback.
 - **Datas:** `availableAt` (fila), `approvedAt` e `updatedAt` são definidos pela aplicação (`new Date()`), não pelo `now()` do banco. Quando duas colunas precisam ser iguais, use o mesmo `Date`.
 - **Logs:** objeto estruturado com `event` em `dominio.acao` (ex.: `nfe.created`, `queue.message_dead`) e `accessKey` para correlação. **Nunca** logue o token do webhook nem os dados do resultado (cnpj, amount etc.); existe teste para isso.
@@ -94,7 +94,8 @@ Constraints na tabela `nfes`: `approved_at_only_when_approved`, `reason_only_whe
 ## Testes
 
 - O E2E sobe o `AppModule` real contra o Postgres de teste, troca `ProviderClient` pelo `FakeProvider` e roda os jobs manualmente com `relay.runCycle()` / `worker.runCycle()`. O polling fica desligado por `BACKGROUND_JOBS_ENABLED=false` em `test/support/env.ts`.
-- Cada teste começa com `TRUNCATE nfes, outbox, queue_messages`, e a suíte roda com `--runInBand`. Não paralelize.
+- Cada teste começa limpando `nfes`, `outbox` e `queue_messages` com `repository.clear()`, e a suíte roda com `--runInBand`. Não paralelize.
+- Leia o estado do banco pelos repositórios (`count`, `find`) e compare os campos em `camelCase`, como nas entidades.
 - O provedor é sempre simulado: o "retorno do provedor" é um `POST /webhooks/provider` com o token de teste. Não integre um fornecedor real.
 - Para simular falhas, use `provider.remainingFailures` ou `jest.spyOn(...).mockRejectedValueOnce(...)`.
 - Toda regra nova ou alterada precisa de teste no `describe` do requisito correspondente. Ao corrigir um bug, escreva primeiro o teste que falha.
