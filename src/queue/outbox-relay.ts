@@ -2,12 +2,13 @@ import { Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown } fro
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { MessageBus } from './message-bus';
-import { errorMessage, PollingLoop } from './polling';
+import { accessKeyOf, errorMessage, PollingLoop } from './polling';
 
 interface OutboxEntry {
   id: string;
   topic: string;
   payload: object;
+  attempts: number;
 }
 
 /** Records a message to publish later. Must run in the same transaction as the data it refers to. */
@@ -50,7 +51,7 @@ export class OutboxRelay implements OnApplicationBootstrap, OnApplicationShutdow
     try {
       await this.dataSource.transaction(async (manager) => {
         const [next]: OutboxEntry[] = await manager.query(
-          `SELECT id, topic, payload
+          `SELECT id, topic, payload, attempts
              FROM outbox
             WHERE published_at IS NULL
               AND NOT (id = ANY($1::bigint[]))
@@ -68,16 +69,28 @@ export class OutboxRelay implements OnApplicationBootstrap, OnApplicationShutdow
 
         await manager.query('UPDATE outbox SET published_at = now(), attempts = attempts + 1 WHERE id = $1', [next.id]);
       });
+      if (entry) {
+        this.logger.log({ event: 'outbox.published', ...this.describe(entry) });
+      }
     } catch (error) {
       if (!entry) {
         throw error;
       }
-      this.logger.warn(`Outbox entry ${entry.id} (${entry.topic}) failed to publish: ${errorMessage(error)}`);
+      this.logger.warn({ event: 'outbox.publish_failed', ...this.describe(entry), error: errorMessage(error) });
       await this.dataSource.query('UPDATE outbox SET attempts = attempts + 1, last_error = $2 WHERE id = $1', [
         entry.id,
         errorMessage(error),
       ]);
     }
     return entry ? entry.id : null;
+  }
+
+  private describe(entry: OutboxEntry): object {
+    return {
+      entryId: entry.id,
+      topic: entry.topic,
+      accessKey: accessKeyOf(entry.payload),
+      attempt: entry.attempts + 1,
+    };
   }
 }

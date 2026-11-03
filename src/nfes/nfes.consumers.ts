@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 import { ProviderClient } from '../provider/provider.client';
-import { InvalidMessageError, QueueWorker } from '../queue/queue-worker';
+import { CommittedLog, InvalidMessageError, QueueWorker } from '../queue/queue-worker';
 import { EnrichmentRequest, EnrichmentResult, isValidAccessKey, TOPIC_ENRICHMENT, TOPIC_RESULT } from './contracts';
 import { evaluateResult } from './evaluate-result';
 
@@ -20,14 +20,16 @@ export class NfesConsumers implements OnModuleInit {
   }
 
   private async callProvider(payload: unknown): Promise<void> {
-    await this.provider.requestEnrichment(readRequest(payload));
+    const request = readRequest(payload);
+    await this.provider.requestEnrichment(request);
+    this.logger.log({ event: 'provider.enrichment_requested', ...request });
   }
 
-  private async applyResult(payload: unknown, manager: EntityManager): Promise<void> {
+  private async applyResult(payload: unknown, manager: EntityManager): Promise<CommittedLog> {
     const result = readResult(payload);
     const evaluation = evaluateResult(result);
     // The ANALISE condition makes redelivery harmless, even when concurrent.
-    const [, updated]: [unknown, number] = await manager.query(
+    const [rows, updated]: [Array<{ id: string }>, number] = await manager.query(
       `UPDATE nfes
           SET status = $2,
               cnpj = $3,
@@ -37,7 +39,8 @@ export class NfesConsumers implements OnModuleInit {
               rejection_reason = $7,
               approved_at = CASE WHEN $2 = 'APROVADA' THEN now() END,
               updated_at = now()
-        WHERE access_key = $1 AND status = 'ANALISE'`,
+        WHERE access_key = $1 AND status = 'ANALISE'
+        RETURNING id`,
       [
         result.accessKey,
         evaluation.status,
@@ -48,9 +51,20 @@ export class NfesConsumers implements OnModuleInit {
         evaluation.reason,
       ],
     );
+    const { accessKey } = result;
     if (updated === 0) {
-      this.logger.log(`Result ignored, unknown key or NFe already decided: ${result.accessKey}`);
+      const [existing]: Array<{ id: string; status: string }> = await manager.query(
+        'SELECT id, status FROM nfes WHERE access_key = $1',
+        [accessKey],
+      );
+      return existing
+        ? { event: 'result.ignored_already_decided', nfeId: existing.id, accessKey, currentStatus: existing.status }
+        : { event: 'result.ignored_unknown_key', accessKey };
     }
+    const nfeId = rows[0].id;
+    return evaluation.status === 'APROVADA'
+      ? { event: 'nfe.approved', nfeId, accessKey }
+      : { event: 'nfe.rejected', nfeId, accessKey, reason: evaluation.reason };
   }
 }
 

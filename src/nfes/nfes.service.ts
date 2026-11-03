@@ -35,9 +35,11 @@ export class NfesService {
         await addToOutbox(manager, TOPIC_ENRICHMENT, request);
         return true;
       });
-      return { nfe: await this.nfes.findOneByOrFail({ accessKey }), created };
+      const nfe = await this.nfes.findOneByOrFail({ accessKey });
+      this.logger.log({ event: created ? 'nfe.created' : 'nfe.duplicate_request', nfeId: nfe.id, accessKey });
+      return { nfe, created };
     } catch (error) {
-      this.logger.error(`Failed to store the NFe: ${errorMessage(error)}`);
+      this.logger.error({ event: 'nfe.create_failed', accessKey, error: errorMessage(error) });
       throw new ServiceUnavailableException('Could not store the NFe. Please try again.');
     }
   }
@@ -45,8 +47,9 @@ export class NfesService {
   async receiveResult(result: EnrichmentResult): Promise<void> {
     try {
       await this.bus.publish(TOPIC_RESULT, result);
+      this.logger.log({ event: 'result.received', accessKey: result.accessKey });
     } catch (error) {
-      this.logger.error(`Failed to publish to ${TOPIC_RESULT}: ${errorMessage(error)}`);
+      this.logger.error({ event: 'result.publish_failed', accessKey: result.accessKey, error: errorMessage(error) });
       throw new ServiceUnavailableException('Could not publish the message. Please try again.');
     }
   }

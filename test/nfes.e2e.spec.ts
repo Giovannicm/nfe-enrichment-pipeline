@@ -1,4 +1,4 @@
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getDataSourceToken } from '@nestjs/typeorm';
 import request from 'supertest';
@@ -463,6 +463,154 @@ describe('NFe pipeline (e2e)', () => {
       expect((await messages(TOPIC_ENRICHMENT))[0]).toMatchObject({ status: 'DEAD', attempts: 3 });
       expect((await getNfe(id)).body.status).toBe('ANALISE');
       expect(provider.requests).toHaveLength(0);
+    });
+  });
+
+  describe('logs', () => {
+    /** Replaces the logger and returns everything written from now on, in order. */
+    const captureLogs = (): Array<Record<string, unknown>> => {
+      const entries: Array<Record<string, unknown>> = [];
+      for (const level of ['log', 'warn', 'error'] as const) {
+        jest.spyOn(Logger.prototype, level).mockImplementation((...args: unknown[]) => {
+          entries.push({ level, ...(args[0] as object) });
+        });
+      }
+      return entries;
+    };
+
+    const events = (entries: Array<Record<string, unknown>>) => entries.map((entry) => entry.event);
+
+    it('follows an approved NFe through every step, correlated by the access key', async () => {
+      const entries = captureLogs();
+
+      const id = await createNfe();
+      await providerReturns(completeResult).expect(202);
+      await runJobs();
+
+      expect(events(entries)).toEqual([
+        'nfe.created',
+        'http.request',
+        'outbox.published',
+        'provider.enrichment_requested',
+        'queue.message_processed',
+        'result.received',
+        'http.request',
+        'nfe.approved',
+        'queue.message_processed',
+      ]);
+      expect(entries.find((entry) => entry.event === 'nfe.approved')).toMatchObject({ nfeId: id, accessKey: ACCESS_KEY });
+      for (const entry of entries.filter((item) => item.event !== 'http.request')) {
+        expect(entry.accessKey).toBe(ACCESS_KEY);
+      }
+    });
+
+    it('logs the HTTP method, path, status and duration, including requests refused by the guard', async () => {
+      const entries = captureLogs();
+
+      await providerReturns(completeResult, 'wrong-token').expect(401);
+
+      expect(entries).toEqual([
+        expect.objectContaining({
+          level: 'warn',
+          event: 'http.request',
+          method: 'POST',
+          path: '/webhooks/provider',
+          status: 401,
+          durationMs: expect.any(Number),
+        }),
+      ]);
+    });
+
+    it('logs the rejection reason and the duplicate request', async () => {
+      await createNfe();
+      const entries = captureLogs();
+
+      await postNfe().expect(200);
+      await providerReturns({ ...completeResult, cnpj: undefined }).expect(202);
+      await runJobs();
+
+      expect(events(entries)).toContain('nfe.duplicate_request');
+      expect(entries.find((entry) => entry.event === 'nfe.rejected')).toMatchObject({
+        reason: 'Missing or invalid data: cnpj',
+      });
+    });
+
+    it('tells an unknown key apart from an NFe already decided', async () => {
+      const entries = captureLogs();
+
+      await providerReturns(completeResult).expect(202);
+      await runJobs();
+      expect(events(entries)).toContain('result.ignored_unknown_key');
+
+      await createNfe();
+      await providerReturns(completeResult).expect(202);
+      await runJobs();
+      await providerReturns(completeResult).expect(202);
+      await runJobs();
+
+      expect(entries.find((entry) => entry.event === 'result.ignored_already_decided')).toMatchObject({
+        currentStatus: 'APROVADA',
+      });
+    });
+
+    it('does not report an approval that was rolled back', async () => {
+      await createNfe();
+      await providerReturns(completeResult).expect(202);
+      const entries = captureLogs();
+
+      await withFailingTrigger('queue_messages', 'BEFORE UPDATE OF processed_at', async () => {
+        await worker.runCycle();
+      });
+
+      expect(events(entries)).not.toContain('nfe.approved');
+      expect(entries.find((entry) => entry.event === 'queue.message_failed')).toMatchObject({
+        level: 'warn',
+        topic: TOPIC_RESULT,
+        accessKey: ACCESS_KEY,
+        attempt: 1,
+        error: 'simulated failure',
+      });
+    });
+
+    it('reports publish failures, retries and dead messages', async () => {
+      const entries = captureLogs();
+      provider.remainingFailures = 3;
+      await postNfe().expect(201);
+      jest.spyOn(bus, 'publish').mockRejectedValueOnce(new Error('queue down'));
+
+      await relay.runCycle();
+      expect(entries.find((entry) => entry.event === 'outbox.publish_failed')).toMatchObject({
+        level: 'warn',
+        attempt: 1,
+        error: 'queue down',
+      });
+
+      await relay.runCycle();
+      await worker.runCycle();
+      await worker.runCycle();
+      await worker.runCycle();
+
+      expect(entries.filter((entry) => entry.event === 'queue.message_failed').map((entry) => entry.attempt)).toEqual([
+        1, 2,
+      ]);
+      expect(entries.find((entry) => entry.event === 'queue.message_dead')).toMatchObject({ level: 'error', attempt: 3 });
+    });
+
+    it('never writes the token or the result data', async () => {
+      const entries = captureLogs();
+      // Differs from the CNPJ embedded in the access key, which is logged on purpose.
+      const result = { ...completeResult, cnpj: '98765432000111', amount: '777.77' };
+
+      await createNfe();
+      await providerReturns(result).expect(202);
+      await runJobs();
+      await providerReturns({ ...result, cancelled: true }).expect(202);
+      await runJobs();
+
+      const written = JSON.stringify(entries);
+      expect(written).not.toContain(TOKEN);
+      expect(written).not.toContain(result.cnpj);
+      expect(written).not.toContain(result.amount);
     });
   });
 

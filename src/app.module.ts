@@ -1,7 +1,8 @@
-import { Module, ValidationPipe } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule, ValidationPipe } from '@nestjs/common';
 import { APP_PIPE } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { databaseOptions } from './database/database.config';
+import { RequestLoggerMiddleware } from './logging/request-logger.middleware';
 import { NfesModule } from './nfes/nfes.module';
 
 @Module({
@@ -18,4 +19,8 @@ import { NfesModule } from './nfes/nfes.module';
     },
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(RequestLoggerMiddleware).forRoutes('{*splat}');
+  }
+}

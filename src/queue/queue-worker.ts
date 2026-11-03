@@ -2,12 +2,18 @@ import { Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown } fro
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { numericEnv } from '../config';
-import { errorMessage, PollingLoop } from './polling';
+import { accessKeyOf, errorMessage, PollingLoop } from './polling';
 
 /** A message that can never succeed: redelivering it is pointless. */
 export class InvalidMessageError extends Error {}
 
-export type MessageHandler = (payload: unknown, manager: EntityManager) => Promise<void>;
+/** What a handler reports. It is logged only after the commit, so a rollback never leaves a false entry. */
+export interface CommittedLog {
+  event: string;
+  [field: string]: unknown;
+}
+
+export type MessageHandler = (payload: unknown, manager: EntityManager) => Promise<CommittedLog | void>;
 
 interface QueueMessage {
   id: string;
@@ -55,6 +61,8 @@ export class QueueWorker implements OnApplicationBootstrap, OnApplicationShutdow
 
   private async processNext(skip: string[]): Promise<string | null> {
     let message: QueueMessage | undefined;
+    let outcome: CommittedLog | undefined;
+    const startedAt = Date.now();
     try {
       await this.dataSource.transaction(async (manager) => {
         const [next]: QueueMessage[] = await manager.query(
@@ -77,7 +85,7 @@ export class QueueWorker implements OnApplicationBootstrap, OnApplicationShutdow
         if (!handler) {
           throw new InvalidMessageError(`No handler for topic: ${next.topic}`);
         }
-        await handler(next.payload, manager);
+        outcome = (await handler(next.payload, manager)) ?? undefined;
 
         await manager.query(
           `UPDATE queue_messages
@@ -86,20 +94,29 @@ export class QueueWorker implements OnApplicationBootstrap, OnApplicationShutdow
           [next.id],
         );
       });
+      if (message) {
+        if (outcome) {
+          this.logger.log(outcome);
+        }
+        this.logger.log({ event: 'queue.message_processed', ...describe(message), durationMs: Date.now() - startedAt });
+      }
     } catch (error) {
       if (!message) {
         throw error;
       }
-      await this.recordFailure(message, error);
+      await this.recordFailure(message, error, Date.now() - startedAt);
     }
     return message ? message.id : null;
   }
 
-  private async recordFailure(message: QueueMessage, error: unknown): Promise<void> {
+  private async recordFailure(message: QueueMessage, error: unknown, durationMs: number): Promise<void> {
     const dead = error instanceof InvalidMessageError || message.attempts + 1 >= this.maxAttempts;
-    this.logger.warn(
-      `Message ${message.id} (${message.topic}) failed, ${dead ? 'marked as DEAD' : 'will be redelivered'}: ${errorMessage(error)}`,
-    );
+    const entry = { ...describe(message), maxAttempts: this.maxAttempts, durationMs, error: errorMessage(error) };
+    if (dead) {
+      this.logger.error({ event: 'queue.message_dead', ...entry });
+    } else {
+      this.logger.warn({ event: 'queue.message_failed', ...entry, retryInMs: this.redeliveryDelayMs });
+    }
     await this.dataSource.query(
       `UPDATE queue_messages
           SET status = $2,
@@ -110,4 +127,13 @@ export class QueueWorker implements OnApplicationBootstrap, OnApplicationShutdow
       [message.id, dead ? 'DEAD' : 'PENDING', errorMessage(error), this.redeliveryDelayMs],
     );
   }
+}
+
+function describe(message: QueueMessage): object {
+  return {
+    messageId: message.id,
+    topic: message.topic,
+    accessKey: accessKeyOf(message.payload),
+    attempt: message.attempts + 1,
+  };
 }

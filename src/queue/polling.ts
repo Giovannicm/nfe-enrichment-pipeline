@@ -20,7 +20,7 @@ export class PollingLoop {
         return;
       }
       this.currentCycle = this.cycle()
-        .catch((error) => this.logger.error(`Cycle failed: ${errorMessage(error)}`))
+        .catch((error) => this.logger.error({ event: 'polling.cycle_failed', error: errorMessage(error) }))
         .finally(() => (this.currentCycle = undefined));
     }, numericEnv('POLL_INTERVAL_MS', 1000));
   }
@@ -33,4 +33,10 @@ export class PollingLoop {
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Correlates a message with its NFe in the logs, without exposing the rest of the payload. */
+export function accessKeyOf(payload: unknown): string | undefined {
+  const accessKey = (payload as { accessKey?: unknown } | null)?.accessKey;
+  return typeof accessKey === 'string' ? accessKey : undefined;
 }
