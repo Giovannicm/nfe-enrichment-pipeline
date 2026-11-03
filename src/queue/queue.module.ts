@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { MessageBus, TableMessageBus } from './message-bus';
-import { OutboxRelay } from './outbox-relay';
+import { QueueMessage } from './queue-message.entity';
 import { QueueWorker } from './queue-worker';
 
 @Module({
-  providers: [{ provide: MessageBus, useClass: TableMessageBus }, QueueWorker, OutboxRelay],
+  imports: [TypeOrmModule.forFeature([QueueMessage])],
+  providers: [{ provide: MessageBus, useClass: TableMessageBus }, QueueWorker],
   exports: [MessageBus, QueueWorker],
 })
 export class QueueModule {}

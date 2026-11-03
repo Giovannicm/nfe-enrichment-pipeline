@@ -1,8 +1,9 @@
 import { Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common';
-import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource, EntityManager } from 'typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, EntityManager, FindOptionsWhere, In, LessThanOrEqual, Not, Repository } from 'typeorm';
 import { numericEnv } from '../config';
 import { accessKeyOf, errorMessage, PollingLoop } from './polling';
+import { QueueMessage } from './queue-message.entity';
 
 /** A message that can never succeed: redelivering it is pointless. */
 export class InvalidMessageError extends Error {}
@@ -15,22 +16,22 @@ export interface CommittedLog {
 
 export type MessageHandler = (payload: unknown, manager: EntityManager) => Promise<CommittedLog | void>;
 
-interface QueueMessage {
-  id: string;
-  topic: string;
-  payload: unknown;
-  attempts: number;
-}
-
 @Injectable()
 export class QueueWorker implements OnApplicationBootstrap, OnApplicationShutdown {
   private readonly logger = new Logger(QueueWorker.name);
   private readonly handlers = new Map<string, MessageHandler>();
   private readonly maxAttempts = numericEnv('QUEUE_MAX_ATTEMPTS', 5, 1);
   private readonly redeliveryDelayMs = numericEnv('QUEUE_REDELIVERY_DELAY_MS', 5000);
-  private readonly polling = new PollingLoop(() => this.runCycle(), this.logger);
+  private readonly polling = new PollingLoop(
+    () => this.runCycle(),
+    this.logger,
+    numericEnv('POLL_INTERVAL_MS', 1000, 1),
+  );
 
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    @InjectRepository(QueueMessage) private readonly messages: Repository<QueueMessage>,
+  ) {}
 
   register(topic: string, handler: MessageHandler): void {
     this.handlers.set(topic, handler);
@@ -60,39 +61,38 @@ export class QueueWorker implements OnApplicationBootstrap, OnApplicationShutdow
   }
 
   private async processNext(skip: string[]): Promise<string | null> {
-    let message: QueueMessage | undefined;
+    // Assigned inside the transaction callback; the cast keeps TypeScript from narrowing it to null.
+    let message = null as QueueMessage | null;
     let outcome: CommittedLog | undefined;
     const startedAt = Date.now();
     try {
       await this.dataSource.transaction(async (manager) => {
-        const [next]: QueueMessage[] = await manager.query(
-          `SELECT id, topic, payload, attempts
-             FROM queue_messages
-            WHERE status = 'PENDING'
-              AND available_at <= now()
-              AND NOT (id = ANY($1::bigint[]))
-            ORDER BY id
-            LIMIT 1
-            FOR UPDATE SKIP LOCKED`,
-          [skip],
-        );
-        if (!next) {
+        const messages = manager.withRepository(this.messages);
+        const where: FindOptionsWhere<QueueMessage> = { status: 'PENDING', availableAt: LessThanOrEqual(new Date()) };
+        if (skip.length > 0) {
+          where.id = Not(In(skip));
+        }
+        message = await messages.findOne({
+          where,
+          order: { id: 'ASC' },
+          lock: { mode: 'pessimistic_write', onLocked: 'skip_locked' },
+        });
+        if (!message) {
           return;
         }
-        message = next;
 
-        const handler = this.handlers.get(next.topic);
+        const handler = this.handlers.get(message.topic);
         if (!handler) {
-          throw new InvalidMessageError(`No handler for topic: ${next.topic}`);
+          throw new InvalidMessageError(`No handler for topic: ${message.topic}`);
         }
-        outcome = (await handler(next.payload, manager)) ?? undefined;
+        outcome = (await handler(message.payload, manager)) ?? undefined;
 
-        await manager.query(
-          `UPDATE queue_messages
-              SET status = 'PROCESSED', attempts = attempts + 1, processed_at = now()
-            WHERE id = $1`,
-          [next.id],
-        );
+        await messages.save({
+          id: message.id,
+          status: 'PROCESSED',
+          attempts: message.attempts + 1,
+          processedAt: new Date(),
+        });
       });
       if (message) {
         if (outcome) {
@@ -117,15 +117,13 @@ export class QueueWorker implements OnApplicationBootstrap, OnApplicationShutdow
     } else {
       this.logger.warn({ event: 'queue.message_failed', ...entry, retryInMs: this.redeliveryDelayMs });
     }
-    await this.dataSource.query(
-      `UPDATE queue_messages
-          SET status = $2,
-              attempts = attempts + 1,
-              last_error = $3,
-              available_at = now() + make_interval(secs => $4::double precision / 1000)
-        WHERE id = $1`,
-      [message.id, dead ? 'DEAD' : 'PENDING', errorMessage(error), this.redeliveryDelayMs],
-    );
+    await this.messages.save({
+      id: message.id,
+      status: dead ? 'DEAD' : 'PENDING',
+      attempts: message.attempts + 1,
+      lastError: errorMessage(error),
+      availableAt: new Date(Date.now() + this.redeliveryDelayMs),
+    });
   }
 }
 

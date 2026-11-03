@@ -6,9 +6,9 @@ import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { TOPIC_ENRICHMENT, TOPIC_RESULT } from '../src/nfes/contracts';
 import { Nfe } from '../src/nfes/nfe.entity';
+import { OutboxRelay } from '../src/outbox/outbox-relay';
 import { ProviderClient } from '../src/provider/provider.client';
 import { MessageBus } from '../src/queue/message-bus';
-import { OutboxRelay } from '../src/queue/outbox-relay';
 import { QueueWorker } from '../src/queue/queue-worker';
 import { FakeProvider } from './support/fake-provider';
 
@@ -300,7 +300,7 @@ describe('NFe pipeline (e2e)', () => {
     });
 
     it('a queued message that is not an object goes DEAD at the first attempt', async () => {
-      await bus.publish(TOPIC_RESULT, null as unknown as object);
+      await bus.publish(TOPIC_RESULT, 'not an object' as unknown as object);
       await worker.runCycle();
 
       const [dead] = await messages(TOPIC_RESULT);

@@ -1,28 +1,23 @@
 import { Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common';
-import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource, EntityManager } from 'typeorm';
-import { MessageBus } from './message-bus';
-import { accessKeyOf, errorMessage, PollingLoop } from './polling';
-
-interface OutboxEntry {
-  id: string;
-  topic: string;
-  payload: object;
-  attempts: number;
-}
-
-/** Records a message to publish later. Must run in the same transaction as the data it refers to. */
-export async function addToOutbox(manager: EntityManager, topic: string, payload: object): Promise<void> {
-  await manager.query('INSERT INTO outbox (topic, payload) VALUES ($1, $2)', [topic, JSON.stringify(payload)]);
-}
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, FindOptionsWhere, In, IsNull, Not, Repository } from 'typeorm';
+import { numericEnv } from '../config';
+import { MessageBus } from '../queue/message-bus';
+import { accessKeyOf, errorMessage, PollingLoop } from '../queue/polling';
+import { OutboxEntry } from './outbox-entry.entity';
 
 @Injectable()
 export class OutboxRelay implements OnApplicationBootstrap, OnApplicationShutdown {
   private readonly logger = new Logger(OutboxRelay.name);
-  private readonly polling = new PollingLoop(() => this.runCycle(), this.logger);
+  private readonly polling = new PollingLoop(
+    () => this.runCycle(),
+    this.logger,
+    numericEnv('OUTBOX_RELAY_INTERVAL_MS', 5000, 1),
+  );
 
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
+    @InjectRepository(OutboxEntry) private readonly entries: Repository<OutboxEntry>,
     private readonly bus: MessageBus,
   ) {}
 
@@ -47,27 +42,27 @@ export class OutboxRelay implements OnApplicationBootstrap, OnApplicationShutdow
   }
 
   private async publishNext(skip: string[]): Promise<string | null> {
-    let entry: OutboxEntry | undefined;
+    // Assigned inside the transaction callback; the cast keeps TypeScript from narrowing it to null.
+    let entry = null as OutboxEntry | null;
     try {
       await this.dataSource.transaction(async (manager) => {
-        const [next]: OutboxEntry[] = await manager.query(
-          `SELECT id, topic, payload, attempts
-             FROM outbox
-            WHERE published_at IS NULL
-              AND NOT (id = ANY($1::bigint[]))
-            ORDER BY id
-            LIMIT 1
-            FOR UPDATE SKIP LOCKED`,
-          [skip],
-        );
-        if (!next) {
+        const entries = manager.withRepository(this.entries);
+        const where: FindOptionsWhere<OutboxEntry> = { publishedAt: IsNull() };
+        if (skip.length > 0) {
+          where.id = Not(In(skip));
+        }
+        entry = await entries.findOne({
+          where,
+          order: { id: 'ASC' },
+          lock: { mode: 'pessimistic_write', onLocked: 'skip_locked' },
+        });
+        if (!entry) {
           return;
         }
-        entry = next;
 
-        await this.bus.publish(next.topic, next.payload, manager);
+        await this.bus.publish(entry.topic, entry.payload, manager);
 
-        await manager.query('UPDATE outbox SET published_at = now(), attempts = attempts + 1 WHERE id = $1', [next.id]);
+        await entries.save({ id: entry.id, publishedAt: new Date(), attempts: entry.attempts + 1 });
       });
       if (entry) {
         this.logger.log({ event: 'outbox.published', ...this.describe(entry) });
@@ -77,10 +72,7 @@ export class OutboxRelay implements OnApplicationBootstrap, OnApplicationShutdow
         throw error;
       }
       this.logger.warn({ event: 'outbox.publish_failed', ...this.describe(entry), error: errorMessage(error) });
-      await this.dataSource.query('UPDATE outbox SET attempts = attempts + 1, last_error = $2 WHERE id = $1', [
-        entry.id,
-        errorMessage(error),
-      ]);
+      await this.entries.save({ id: entry.id, attempts: entry.attempts + 1, lastError: errorMessage(error) });
     }
     return entry ? entry.id : null;
   }

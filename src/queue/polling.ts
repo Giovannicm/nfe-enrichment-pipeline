@@ -1,6 +1,5 @@
 import { Logger } from '@nestjs/common';
 import { isString } from 'class-validator';
-import { numericEnv } from '../config';
 
 /** Repeats a cycle on an interval, skipping a tick while the previous cycle is still running. */
 export class PollingLoop {
@@ -10,6 +9,7 @@ export class PollingLoop {
   constructor(
     private readonly cycle: () => Promise<unknown>,
     private readonly logger: Logger,
+    private readonly intervalMs: number,
   ) {}
 
   start(): void {
@@ -23,7 +23,7 @@ export class PollingLoop {
       this.currentCycle = this.cycle()
         .catch((error) => this.logger.error({ event: 'polling.cycle_failed', error: errorMessage(error) }))
         .finally(() => (this.currentCycle = undefined));
-    }, numericEnv('POLL_INTERVAL_MS', 1000, 1));
+    }, this.intervalMs);
   }
 
   async stop(): Promise<void> {

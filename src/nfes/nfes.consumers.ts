@@ -1,11 +1,13 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ClassConstructor, plainToInstance } from 'class-transformer';
 import { isObject, validateSync } from 'class-validator';
-import { EntityManager } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { ProviderClient } from '../provider/provider.client';
 import { CommittedLog, InvalidMessageError, QueueWorker } from '../queue/queue-worker';
 import { EnrichmentRequest, EnrichmentResult, TOPIC_ENRICHMENT, TOPIC_RESULT } from './contracts';
 import { evaluateResult } from './evaluate-result';
+import { Nfe } from './nfe.entity';
 import { EnrichmentRequestDto, EnrichmentResultDto } from './nfes.dto';
 
 @Injectable()
@@ -15,6 +17,7 @@ export class NfesConsumers implements OnModuleInit {
   constructor(
     private readonly worker: QueueWorker,
     private readonly provider: ProviderClient,
+    @InjectRepository(Nfe) private readonly nfes: Repository<Nfe>,
   ) {}
 
   onModuleInit(): void {
@@ -31,11 +34,9 @@ export class NfesConsumers implements OnModuleInit {
   private async applyResult(payload: unknown, manager: EntityManager): Promise<CommittedLog> {
     const result = readResult(payload);
     const { accessKey } = result;
+    const nfes = manager.withRepository(this.nfes);
     // The lock makes concurrent deliveries of a result wait, so the NFe is decided only once.
-    const [nfe]: Array<{ id: string; status: string }> = await manager.query(
-      'SELECT id, status FROM nfes WHERE access_key = $1 FOR UPDATE',
-      [accessKey],
-    );
+    const nfe = await nfes.findOne({ where: { accessKey }, lock: { mode: 'pessimistic_write' } });
     if (!nfe) {
       return { event: 'result.ignored_unknown_key', accessKey };
     }
@@ -44,27 +45,18 @@ export class NfesConsumers implements OnModuleInit {
     }
 
     const evaluation = evaluateResult(result);
-    await manager.query(
-      `UPDATE nfes
-          SET status = $2,
-              cnpj = $3,
-              amount = $4,
-              issue_date = $5,
-              cancelled = $6,
-              rejection_reason = $7,
-              approved_at = CASE WHEN $2 = 'APROVADA' THEN now() END,
-              updated_at = now()
-        WHERE id = $1`,
-      [
-        nfe.id,
-        evaluation.status,
-        evaluation.cnpj,
-        evaluation.amount,
-        evaluation.issueDate,
-        evaluation.cancelled,
-        evaluation.reason,
-      ],
-    );
+    const decidedAt = new Date();
+    await nfes.save({
+      id: nfe.id,
+      status: evaluation.status,
+      cnpj: evaluation.cnpj,
+      amount: evaluation.amount,
+      issueDate: evaluation.issueDate === null ? null : new Date(evaluation.issueDate),
+      cancelled: evaluation.cancelled,
+      rejectionReason: evaluation.reason,
+      approvedAt: evaluation.status === 'APROVADA' ? decidedAt : null,
+      updatedAt: decidedAt,
+    });
     const nfeId = nfe.id;
     return evaluation.status === 'APROVADA'
       ? { event: 'nfe.approved', nfeId, accessKey }

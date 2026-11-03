@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource, EntityManager } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { EntityManager, Repository } from 'typeorm';
+import { QueueMessage } from './queue-message.entity';
 
 export abstract class MessageBus {
   /** With `manager`, publishing joins the caller's transaction. */
@@ -9,14 +10,12 @@ export abstract class MessageBus {
 
 @Injectable()
 export class TableMessageBus extends MessageBus {
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {
+  constructor(@InjectRepository(QueueMessage) private readonly messages: Repository<QueueMessage>) {
     super();
   }
 
   async publish(topic: string, payload: object, manager?: EntityManager): Promise<void> {
-    await (manager ?? this.dataSource.manager).query('INSERT INTO queue_messages (topic, payload) VALUES ($1, $2)', [
-      topic,
-      JSON.stringify(payload),
-    ]);
+    const messages = manager ? manager.withRepository(this.messages) : this.messages;
+    await messages.save(messages.create({ topic, payload, availableAt: new Date() }));
   }
 }

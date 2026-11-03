@@ -44,7 +44,8 @@ Não existe lint nem formatter configurado. Siga o estilo dos arquivos vizinhos:
 | `src/nfes/evaluate-result.ts` | Regra pura de aprovação/rejeição. Toda regra sobre os dados do provedor fica aqui |
 | `src/nfes/nfes.dto.ts` | DTOs com `class-validator` (HTTP e mensagens consumidas) |
 | `src/nfes/webhook-token.guard.ts` | Valida o header `x-webhook-token` com comparação em tempo constante |
-| `src/queue/` | `MessageBus` (fila em tabela), `OutboxRelay`, `QueueWorker`, `PollingLoop` |
+| `src/outbox/` | Entidade `OutboxEntry`, `Outbox` (grava na transação do chamador) e `OutboxRelay` (publica no `MessageBus`) |
+| `src/queue/` | Entidade `QueueMessage`, `MessageBus` (fila em tabela), `QueueWorker` e `PollingLoop` |
 | `src/provider/provider.client.ts` | `ProviderClient` abstrato; `SimulatedProviderClient` não faz nada (não há fornecedor real) |
 | `src/database/` | Config do TypeORM, `data-source.ts` para a CLI e migrations |
 | `src/logging/` | Logger de eventos de uma linha e middleware de log HTTP |
@@ -75,8 +76,10 @@ Constraints na tabela `nfes`: `approved_at_only_when_approved`, `reason_only_whe
 - **Validação:** use `class-validator` / `class-transformer`. Não valide manualmente no controller. O DTO do webhook (`EnrichmentResultDto`) recusa **apenas** a chave inválida. Dados ausentes ou inválidos precisam chegar à fila para a nota ser rejeitada com motivo.
 - **Mensagens da fila:** são validadas ao consumir. Payload fora do contrato gera `InvalidMessageError` e vai direto para `DEAD`, sem nova tentativa.
 - **Handlers da fila** recebem o `EntityManager` da transação do worker. Faça toda escrita por ele e retorne um `CommittedLog`, que só é logado depois do commit. Handlers precisam ser idempotentes: a entrega é *at-least-once*.
-- **Outbox:** qualquer mensagem gerada por uma mudança de dados usa `addToOutbox(manager, ...)` dentro da mesma transação. Não publique direto no `MessageBus` a partir de um fluxo de escrita de negócio.
-- **SQL:** os caminhos críticos usam SQL explícito via `manager.query` (`FOR UPDATE`, `SKIP LOCKED`). Mantenha assim e prefira isso a abstrações que escondam o lock.
+- **Outbox:** qualquer mensagem gerada por uma mudança de dados usa `Outbox.add(manager, ...)` dentro da mesma transação. Não publique direto no `MessageBus` a partir de um fluxo de escrita de negócio.
+- **Acesso a dados:** use repositórios injetados com `@InjectRepository` e grave com `save`, sem `manager.query`. Dentro de uma transação, use `manager.withRepository(this.repo)`. Os locks usam `findOne({ lock: { mode: 'pessimistic_write', onLocked: 'skip_locked' } })`. SQL escrito à mão fica só nas migrations.
+- **Saves parciais:** para atualizar, passe `{ id, ...campos }` ao `save`, em vez de alterar a entidade carregada. Assim, um caminho de falha não grava por engano um campo alterado antes do rollback.
+- **Datas:** `availableAt` (fila), `approvedAt` e `updatedAt` são definidos pela aplicação (`new Date()`), não pelo `now()` do banco. Quando duas colunas precisam ser iguais, use o mesmo `Date`.
 - **Logs:** objeto estruturado com `event` em `dominio.acao` (ex.: `nfe.created`, `queue.message_dead`) e `accessKey` para correlação. **Nunca** logue o token do webhook nem os dados do resultado (cnpj, amount etc.); existe teste para isso.
 - **Configuração:** leia variáveis com `requiredEnv` / `numericEnv` de `src/config.ts`, que falham no startup em valores inválidos. Não use `@nestjs/config`.
 - **Erros HTTP:** falha de infraestrutura ao gravar ou publicar responde `503` com mensagem genérica. Detalhes vão só para o log.
@@ -103,9 +106,10 @@ Constraints na tabela `nfes`: `approved_at_only_when_approved`, `reason_only_whe
 | `DATABASE_URL` | sim | — | Conexão PostgreSQL |
 | `WEBHOOK_TOKEN` | sim | — | Valor esperado no header `x-webhook-token` |
 | `PORT` | não | `3000` | Porta HTTP |
-| `POLL_INTERVAL_MS` | não | `1000` | Intervalo do relay e do worker |
+| `POLL_INTERVAL_MS` | não | `1000` | Intervalo entre os ciclos do worker da fila |
+| `OUTBOX_RELAY_INTERVAL_MS` | não | `5000` | Intervalo entre os ciclos do relay da outbox |
 | `QUEUE_MAX_ATTEMPTS` | não | `5` | Entregas antes de `DEAD` |
-| `QUEUE_REDELIVERY_DELAY_MS` | não | `5000` | Espera fixa entre tentativas |
+| `QUEUE_REDELIVERY_DELAY_MS` | não | `5000` | Espera fixa entre tentativas da fila |
 | `BACKGROUND_JOBS_ENABLED` | não | ligado | `false` desliga o relay e o worker |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | compose | — | Credenciais do container `db` |
 

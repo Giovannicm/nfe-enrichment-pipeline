@@ -2,8 +2,8 @@ import { ConflictException, Injectable, Logger, ServiceUnavailableException } fr
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
 import { DataSource, QueryFailedError, Repository } from 'typeorm';
+import { Outbox } from '../outbox/outbox';
 import { MessageBus } from '../queue/message-bus';
-import { addToOutbox } from '../queue/outbox-relay';
 import { errorMessage } from '../queue/polling';
 import { EnrichmentRequest, EnrichmentResult, TOPIC_ENRICHMENT, TOPIC_RESULT } from './contracts';
 import { Nfe } from './nfe.entity';
@@ -14,6 +14,7 @@ export class NfesService {
 
   constructor(
     private readonly bus: MessageBus,
+    private readonly outbox: Outbox,
     @InjectDataSource() private readonly dataSource: DataSource,
     @InjectRepository(Nfe) private readonly nfes: Repository<Nfe>,
   ) {}
@@ -28,9 +29,10 @@ export class NfesService {
     const id = randomUUID();
     try {
       await this.dataSource.transaction(async (manager) => {
-        await manager.query('INSERT INTO nfes (id, access_key) VALUES ($1, $2)', [id, accessKey]);
+        const nfes = manager.withRepository(this.nfes);
+        await nfes.save(nfes.create({ id, accessKey, status: 'ANALISE' }));
         const request: EnrichmentRequest = { nfeId: id, accessKey };
-        await addToOutbox(manager, TOPIC_ENRICHMENT, request);
+        await this.outbox.add(manager, TOPIC_ENRICHMENT, request);
       });
     } catch (error) {
       if (isUniqueViolation(error)) {
