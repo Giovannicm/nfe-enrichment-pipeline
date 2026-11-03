@@ -160,6 +160,26 @@ describe('NFe pipeline (e2e)', () => {
       expect(await outboxEntries()).toHaveLength(0);
     });
 
+    it('refuses an array body or no body at all', async () => {
+      await postNfe([{ accessKey: ACCESS_KEY }]).expect(400);
+      await request(app.getHttpServer()).post('/nfes').expect(400);
+
+      expect(await countNfes()).toBe(0);
+    });
+
+    it('explains why the key was refused', async () => {
+      const response = await postNfe({ accessKey: '123' }).expect(400);
+
+      expect(response.body.message).toEqual(['accessKey must have 44 numeric digits']);
+    });
+
+    it('ignores unknown fields', async () => {
+      const response = await postNfe({ accessKey: ACCESS_KEY, status: 'APROVADA', id: 'chosen-by-client' }).expect(201);
+
+      expect(response.body.status).toBe('ANALISE');
+      expect(response.body.id).not.toBe('chosen-by-client');
+    });
+
     it('answers 400 for a malformed id and 404 for an unknown one', async () => {
       await getNfe('not-a-uuid').expect(400);
       await getNfe('00000000-0000-4000-8000-000000000000').expect(404);
@@ -463,6 +483,35 @@ describe('NFe pipeline (e2e)', () => {
     it('refuses a result without a valid key', async () => {
       await providerReturns({ ...completeResult, accessKey: '123' }).expect(400);
       expect(await messages(TOPIC_RESULT)).toHaveLength(0);
+    });
+
+    it('refuses an array body or no body at all', async () => {
+      await providerReturns([completeResult]).expect(400);
+      await request(app.getHttpServer()).post('/webhooks/provider').set('x-webhook-token', TOKEN).expect(400);
+
+      expect(await messages(TOPIC_RESULT)).toHaveLength(0);
+    });
+
+    it('checks the token before validating the body', async () => {
+      await providerReturns({ accessKey: '123' }, 'wrong-token').expect(401);
+    });
+
+    it.each([
+      ['cnpj', 12345678000190],
+      ['amount', 10.5],
+      ['amount', { value: 1 }],
+      ['issueDate', 'yesterday'],
+      ['cancelled', 'false'],
+    ])('accepts %s = %j, and the NFe becomes REJEITADA with a reason', async (field, content) => {
+      const id = await createNfe();
+
+      await providerReturns({ ...completeResult, [field]: content }).expect(202);
+      await runJobs();
+
+      expect((await getNfe(id)).body).toMatchObject({
+        status: 'REJEITADA',
+        rejectionReason: `Missing or invalid data: ${field}`,
+      });
     });
 
     it('publishes only the contract fields', async () => {

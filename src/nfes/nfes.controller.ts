@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Get,
@@ -12,8 +11,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Response } from 'express';
-import { EnrichmentResult, isValidAccessKey } from './contracts';
 import { Nfe } from './nfe.entity';
+import { CreateNfeDto, EnrichmentResultDto } from './nfes.dto';
 import { NfesService } from './nfes.service';
 import { WebhookTokenGuard } from './webhook-token.guard';
 
@@ -22,11 +21,8 @@ export class NfesController {
   constructor(private readonly nfes: NfesService) {}
 
   @Post('nfes')
-  async create(
-    @Body() body: { accessKey?: unknown } | undefined,
-    @Res({ passthrough: true }) response: Response,
-  ): Promise<Nfe> {
-    const { nfe, created } = await this.nfes.create(requireAccessKey(body?.accessKey));
+  async create(@Body() body: CreateNfeDto, @Res({ passthrough: true }) response: Response): Promise<Nfe> {
+    const { nfe, created } = await this.nfes.create(body.accessKey);
     response.status(created ? 201 : 200);
     return nfe;
   }
@@ -43,15 +39,7 @@ export class NfesController {
   @Post('webhooks/provider')
   @HttpCode(202)
   @UseGuards(WebhookTokenGuard)
-  async receiveResult(@Body() body?: Partial<EnrichmentResult>): Promise<void> {
-    requireAccessKey(body?.accessKey);
-    await this.nfes.receiveResult(body as EnrichmentResult);
+  async receiveResult(@Body() body: EnrichmentResultDto): Promise<void> {
+    await this.nfes.receiveResult(body);
   }
-}
-
-function requireAccessKey(key: unknown): string {
-  if (!isValidAccessKey(key)) {
-    throw new BadRequestException('accessKey must have 44 numeric digits');
-  }
-  return key;
 }

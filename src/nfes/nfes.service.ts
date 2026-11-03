@@ -42,11 +42,9 @@ export class NfesService {
     }
   }
 
-  /** Publishes only the contract fields. */
   async receiveResult(result: EnrichmentResult): Promise<void> {
-    const { accessKey, cnpj, amount, issueDate, cancelled } = result;
     try {
-      await this.bus.publish(TOPIC_RESULT, { accessKey, cnpj, amount, issueDate, cancelled });
+      await this.bus.publish(TOPIC_RESULT, result);
     } catch (error) {
       this.logger.error(`Failed to publish to ${TOPIC_RESULT}: ${errorMessage(error)}`);
       throw new ServiceUnavailableException('Could not publish the message. Please try again.');
