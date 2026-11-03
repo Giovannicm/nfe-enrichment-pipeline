@@ -103,7 +103,7 @@ describe('NFe pipeline (e2e)', () => {
     }
   };
 
-  describe('entry', () => {
+  describe('creation in ANALISE and outbound message', () => {
     it('POST creates the NFe in ANALISE, without approval date, and does not call the provider', async () => {
       const response = await postNfe().expect(201);
 
@@ -149,11 +149,11 @@ describe('NFe pipeline (e2e)', () => {
     });
 
     it.each([
-      ['short', '123'],
-      ['with letters', 'a'.repeat(44)],
+      ['too short', '123'],
+      ['not numeric', 'a'.repeat(44)],
       ['missing', undefined],
-      ['numeric', 123],
-    ])('refuses a %s key without writing', async (_description, key) => {
+      ['a number', 123],
+    ])('refuses a key that is %s, without writing', async (_description, key) => {
       await postNfe({ accessKey: key }).expect(400);
 
       expect(await countNfes()).toBe(0);
@@ -186,7 +186,7 @@ describe('NFe pipeline (e2e)', () => {
     });
   });
 
-  describe('duplicate key', () => {
+  describe('two requests with the same key', () => {
     it('two sequential requests create one NFe, one outbox entry and one provider call', async () => {
       const first = await postNfe().expect(201);
       await runJobs();
@@ -226,7 +226,7 @@ describe('NFe pipeline (e2e)', () => {
     });
   });
 
-  describe('provider result', () => {
+  describe('approval and rejection by the provider result', () => {
     it('the webhook only publishes: the NFe changes in queue processing', async () => {
       const id = await createNfe();
 
@@ -298,7 +298,7 @@ describe('NFe pipeline (e2e)', () => {
     });
   });
 
-  describe('inbound message redelivery', () => {
+  describe('the same result delivered twice', () => {
     it('the same message delivered twice does not change the NFe again', async () => {
       const id = await createNfe();
       await providerReturns(completeResult).expect(202);
@@ -357,7 +357,7 @@ describe('NFe pipeline (e2e)', () => {
     });
   });
 
-  describe('publish failure', () => {
+  describe('publish failure: the NFe is not lost nor approved', () => {
     it('does not lose the NFe nor approve it: the request succeeded and the relay retries', async () => {
       const { id } = (await postNfe().expect(201)).body;
       jest.spyOn(bus, 'publish').mockRejectedValueOnce(new Error('queue down'));
@@ -436,7 +436,7 @@ describe('NFe pipeline (e2e)', () => {
     });
   });
 
-  describe('provider failure', () => {
+  describe('provider failure and redelivery', () => {
     it('keeps the NFe in ANALISE, and the call is redelivered', async () => {
       provider.remainingFailures = 1;
 
@@ -614,11 +614,11 @@ describe('NFe pipeline (e2e)', () => {
     });
   });
 
-  describe('webhook', () => {
+  describe('webhook authentication and validation', () => {
     it.each([
       ['wrong', 'wrong-token'],
       ['empty', ''],
-    ])('refuses a %s token without publishing', async (_description, token) => {
+    ])('refuses a token that is %s, without publishing', async (_description, token) => {
       await providerReturns(completeResult, token).expect(401);
       expect(await messages(TOPIC_RESULT)).toHaveLength(0);
     });

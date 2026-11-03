@@ -10,7 +10,8 @@
     "migration:run": "typeorm -d dist/database/data-source.js migration:run",
     "migration:revert": "typeorm -d dist/database/data-source.js migration:revert",
     "migration:show": "typeorm -d dist/database/data-source.js migration:show",
-    "migration:create": "typeorm migration:create"
+    "migration:create": "typeorm migration:create",
+    "test:cov": "jest --runInBand --coverage"
   },
   "jest": {
     "preset": "ts-jest",
@@ -24,6 +25,13 @@
     ],
     "setupFiles": [
       "<rootDir>/test/support/env.ts"
+    ],
+    "verbose": true,
+    "collectCoverageFrom": [
+      "src/**/*.ts",
+      "!src/main.ts",
+      "!src/**/*.spec.ts",
+      "!src/database/data-source.ts"
     ]
   },
   "dependencies": {

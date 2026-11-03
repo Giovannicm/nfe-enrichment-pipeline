@@ -28,7 +28,7 @@ describe('evaluateResult', () => {
     expect(evaluateResult({ ...complete, issueDate: '2026-10-30' }).status).toBe('APROVADA');
   });
 
-  it('rejects a cancelled nfe, even with complete data', () => {
+  it('rejects a cancelled NFe, even with complete data', () => {
     const evaluation = evaluateResult({ ...complete, cancelled: true });
     expect(evaluation.status).toBe('REJEITADA');
     expect(evaluation.reason).toBe('NFe cancelled');
