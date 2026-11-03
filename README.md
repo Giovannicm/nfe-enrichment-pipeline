@@ -82,6 +82,8 @@ Recebida em `POST /webhooks/provider`, com o header `x-webhook-token`.
 | --- | --- |
 | Reprocessamento de mensagens `DEAD` | Se a chamada ao provedor esgotar as tentativas, a nota fica em `ANALISE` até uma ação manual |
 | Backoff exponencial | O teste usa uma espera fixa entre as tentativas |
+| Prazo para o retorno do provedor | Se o provedor recebe o pedido e nunca responde, a nota fica em `ANALISE` indefinidamente, sem rotina de reconciliação. O provedor não fazia parte da implementação, então esse comportamento fica como ponto em aberto |
+| Limpeza das tabelas `outbox` e `queue_messages` | As duas crescem sem limite. Em um ambiente real, `queue_messages` não existiria, pois a fila seria um broker. Por ser um teste técnico, a limpeza da `outbox` não se mostrou necessária |
 
 ## Implementação da IA x Alterações
 
@@ -93,3 +95,6 @@ Recebida em `POST /webhooks/provider`, com o header `x-webhook-token`.
 | Havia poucos logs, com pouca informação sobre cada etapa | Foram adicionados logs por evento em todo o fluxo, para rastrear cada nota pela chave de acesso |
 | Uma chave já recebida era ignorada, e a API seguia respondendo com a nota existente | A criação passou a responder `409 Conflict`, com o id da nota existente |
 | O resultado do provedor tentava atualizar a nota antes de verificar se ela existia | A nota passou a ser buscada e travada antes da atualização; chave inexistente ou nota já decidida encerram sem alterar nada |
+| As gravações na nota, na outbox e na fila usavam SQL escrito à mão (`manager.query`) | Passaram a usar entidades e repositórios injetados com `@InjectRepository`, gravando com `save` e travando com `findOne` |
+| O relay rodava em ciclos fixos de 1s, junto com o worker | O ciclo do relay passou a ser configurável em `OUTBOX_RELAY_INTERVAL_MS`, com padrão de 5s |
+| A outbox ficava junto da fila, na pasta `src/queue` | A outbox passou a ter pasta e módulo próprios, em `src/outbox` |

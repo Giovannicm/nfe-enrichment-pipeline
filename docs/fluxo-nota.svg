@@ -51,7 +51,8 @@
 
   <rect class="no" x="400" y="230" width="160" height="56" rx="8"/>
   <text class="texto" x="480" y="255">Relay</text>
-  <text class="detalhe" x="480" y="274">ciclos de 1 s</text>
+  <text class="detalhe" x="480" y="274">ciclos de 5 s (padrão)</text>
+  <text class="detalhe" x="480" y="308">variável OUTBOX_RELAY_INTERVAL_MS</text>
 
   <rect class="dados" x="760" y="230" width="160" height="56" rx="8"/>
   <text class="texto" x="840" y="263">Fila</text>
