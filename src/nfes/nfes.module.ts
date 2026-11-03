@@ -6,6 +6,7 @@ import { Nfe } from './nfe.entity';
 import { NfesConsumers } from './nfes.consumers';
 import { NfesService } from './nfes.service';
 import { NfesController } from './nfes.controller';
+import { WebhookTokenGuard } from './webhook-token.guard';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Nfe]), QueueModule],
@@ -13,6 +14,7 @@ import { NfesController } from './nfes.controller';
   providers: [
     NfesService,
     NfesConsumers,
+    WebhookTokenGuard,
     { provide: ProviderClient, useClass: SimulatedProviderClient },
   ],
 })

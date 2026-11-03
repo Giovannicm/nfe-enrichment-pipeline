@@ -12,6 +12,7 @@ import { QueueWorker } from '../src/queue/queue-worker';
 import { FakeProvider } from './support/fake-provider';
 
 const ACCESS_KEY = '35261012345678000190550010000000011000000011';
+const TOKEN = process.env.WEBHOOK_TOKEN as string;
 
 const completeResult = {
   accessKey: ACCESS_KEY,
@@ -55,8 +56,9 @@ describe('NFe pipeline (e2e)', () => {
 
   const postNfe = (body: object = { accessKey: ACCESS_KEY }) => request(app.getHttpServer()).post('/nfes').send(body);
 
-  /** The simulated provider publishes the result straight to the queue. */
-  const providerReturns = (body: object) => bus.publish(TOPIC_RESULT, body);
+  /** The simulated provider publishes the result by calling the webhook. */
+  const providerReturns = (body: object, token = TOKEN) =>
+    request(app.getHttpServer()).post('/webhooks/provider').set('x-webhook-token', token).send(body);
 
   const getNfe = (id: string) => request(app.getHttpServer()).get(`/nfes/${id}`);
 
@@ -191,7 +193,7 @@ describe('NFe pipeline (e2e)', () => {
 
     it('a second request returns an NFe already decided, without reopening it', async () => {
       const id = await createNfe();
-      await providerReturns(completeResult);
+      await providerReturns(completeResult).expect(202);
       await runJobs();
       const before = (await getNfe(id)).body;
 
@@ -205,10 +207,18 @@ describe('NFe pipeline (e2e)', () => {
   });
 
   describe('provider result', () => {
+    it('the webhook only publishes: the NFe changes in queue processing', async () => {
+      const id = await createNfe();
+
+      await providerReturns(completeResult).expect(202);
+
+      expect((await getNfe(id)).body.status).toBe('ANALISE');
+      expect(await messages(TOPIC_RESULT)).toHaveLength(1);
+    });
 
     it('approves after a complete result', async () => {
       const id = await createNfe();
-      await providerReturns(completeResult);
+      await providerReturns(completeResult).expect(202);
       await runJobs();
 
       const nfe = (await getNfe(id)).body;
@@ -225,7 +235,7 @@ describe('NFe pipeline (e2e)', () => {
 
     it('rejects a cancelled result, stores the reason and no approval date', async () => {
       const id = await createNfe();
-      await providerReturns({ ...completeResult, cancelled: true });
+      await providerReturns({ ...completeResult, cancelled: true }).expect(202);
       await runJobs();
 
       expect((await getNfe(id)).body).toMatchObject({
@@ -238,7 +248,7 @@ describe('NFe pipeline (e2e)', () => {
 
     it.each(['cnpj', 'amount', 'issueDate'])('rejects a result without %s and stores the reason', async (field) => {
       const id = await createNfe();
-      await providerReturns({ ...completeResult, [field]: undefined });
+      await providerReturns({ ...completeResult, [field]: undefined }).expect(202);
       await runJobs();
 
       expect((await getNfe(id)).body).toMatchObject({
@@ -249,7 +259,7 @@ describe('NFe pipeline (e2e)', () => {
     });
 
     it('the inbound message does not create an NFe when the key is unknown', async () => {
-      await providerReturns(completeResult);
+      await providerReturns(completeResult).expect(202);
       await runJobs();
 
       expect(await countNfes()).toBe(0);
@@ -271,11 +281,11 @@ describe('NFe pipeline (e2e)', () => {
   describe('inbound message redelivery', () => {
     it('the same message delivered twice does not change the NFe again', async () => {
       const id = await createNfe();
-      await providerReturns(completeResult);
+      await providerReturns(completeResult).expect(202);
       await runJobs();
       const first = (await getNfe(id)).body;
 
-      await providerReturns(completeResult);
+      await providerReturns(completeResult).expect(202);
       await runJobs();
 
       expect(await messages(TOPIC_RESULT)).toHaveLength(2);
@@ -296,11 +306,11 @@ describe('NFe pipeline (e2e)', () => {
 
     it('a divergent result after the decision is ignored', async () => {
       const id = await createNfe();
-      await providerReturns(completeResult);
+      await providerReturns(completeResult).expect(202);
       await runJobs();
       const approved = (await getNfe(id)).body;
 
-      await providerReturns({ ...completeResult, cancelled: true });
+      await providerReturns({ ...completeResult, cancelled: true }).expect(202);
       await runJobs();
 
       expect((await getNfe(id)).body).toEqual(approved);
@@ -308,7 +318,7 @@ describe('NFe pipeline (e2e)', () => {
 
     it('a consumption failure rolls back the transaction and the queue redelivers the message', async () => {
       const id = await createNfe();
-      await providerReturns(completeResult);
+      await providerReturns(completeResult).expect(202);
 
       // Fails the transaction after the NFe has been updated, when the message is acknowledged.
       await withFailingTrigger('queue_messages', 'BEFORE UPDATE OF processed_at', async () => {
@@ -379,6 +389,19 @@ describe('NFe pipeline (e2e)', () => {
       expect(await countNfes()).toBe(1);
       expect(await outboxEntries()).toHaveLength(1);
     });
+
+    it('a failure publishing the result returns 503, and the provider can retry', async () => {
+      const id = await createNfe();
+      jest.spyOn(bus, 'publish').mockRejectedValueOnce(new Error('queue down'));
+
+      await providerReturns(completeResult).expect(503);
+      await runJobs();
+      expect((await getNfe(id)).body.status).toBe('ANALISE');
+
+      await providerReturns(completeResult).expect(202);
+      await runJobs();
+      expect((await getNfe(id)).body.status).toBe('APROVADA');
+    });
   });
 
   describe('concurrent workers', () => {
@@ -420,6 +443,32 @@ describe('NFe pipeline (e2e)', () => {
       expect((await messages(TOPIC_ENRICHMENT))[0]).toMatchObject({ status: 'DEAD', attempts: 3 });
       expect((await getNfe(id)).body.status).toBe('ANALISE');
       expect(provider.requests).toHaveLength(0);
+    });
+  });
+
+  describe('webhook', () => {
+    it.each([
+      ['wrong', 'wrong-token'],
+      ['empty', ''],
+    ])('refuses a %s token without publishing', async (_description, token) => {
+      await providerReturns(completeResult, token).expect(401);
+      expect(await messages(TOPIC_RESULT)).toHaveLength(0);
+    });
+
+    it('refuses a request without the token header', async () => {
+      await request(app.getHttpServer()).post('/webhooks/provider').send(completeResult).expect(401);
+      expect(await messages(TOPIC_RESULT)).toHaveLength(0);
+    });
+
+    it('refuses a result without a valid key', async () => {
+      await providerReturns({ ...completeResult, accessKey: '123' }).expect(400);
+      expect(await messages(TOPIC_RESULT)).toHaveLength(0);
+    });
+
+    it('publishes only the contract fields', async () => {
+      await providerReturns({ ...completeResult, extra: 'discard' }).expect(202);
+
+      expect((await messages(TOPIC_RESULT))[0].payload).toEqual(completeResult);
     });
   });
 });

@@ -2,9 +2,10 @@ import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
 import { DataSource, Repository } from 'typeorm';
+import { MessageBus } from '../queue/message-bus';
 import { addToOutbox } from '../queue/outbox-relay';
 import { errorMessage } from '../queue/polling';
-import { EnrichmentRequest, TOPIC_ENRICHMENT } from './contracts';
+import { EnrichmentRequest, EnrichmentResult, TOPIC_ENRICHMENT, TOPIC_RESULT } from './contracts';
 import { Nfe } from './nfe.entity';
 
 @Injectable()
@@ -12,6 +13,7 @@ export class NfesService {
   private readonly logger = new Logger(NfesService.name);
 
   constructor(
+    private readonly bus: MessageBus,
     @InjectDataSource() private readonly dataSource: DataSource,
     @InjectRepository(Nfe) private readonly nfes: Repository<Nfe>,
   ) {}
@@ -37,6 +39,17 @@ export class NfesService {
     } catch (error) {
       this.logger.error(`Failed to store the NFe: ${errorMessage(error)}`);
       throw new ServiceUnavailableException('Could not store the NFe. Please try again.');
+    }
+  }
+
+  /** Publishes only the contract fields. */
+  async receiveResult(result: EnrichmentResult): Promise<void> {
+    const { accessKey, cnpj, amount, issueDate, cancelled } = result;
+    try {
+      await this.bus.publish(TOPIC_RESULT, { accessKey, cnpj, amount, issueDate, cancelled });
+    } catch (error) {
+      this.logger.error(`Failed to publish to ${TOPIC_RESULT}: ${errorMessage(error)}`);
+      throw new ServiceUnavailableException('Could not publish the message. Please try again.');
     }
   }
 

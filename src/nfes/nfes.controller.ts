@@ -3,16 +3,19 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   NotFoundException,
   Param,
   ParseUUIDPipe,
   Post,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import { Response } from 'express';
-import { isValidAccessKey } from './contracts';
+import { EnrichmentResult, isValidAccessKey } from './contracts';
 import { Nfe } from './nfe.entity';
 import { NfesService } from './nfes.service';
+import { WebhookTokenGuard } from './webhook-token.guard';
 
 @Controller()
 export class NfesController {
@@ -35,6 +38,14 @@ export class NfesController {
       throw new NotFoundException('NFe not found');
     }
     return nfe;
+  }
+
+  @Post('webhooks/provider')
+  @HttpCode(202)
+  @UseGuards(WebhookTokenGuard)
+  async receiveResult(@Body() body?: Partial<EnrichmentResult>): Promise<void> {
+    requireAccessKey(body?.accessKey);
+    await this.nfes.receiveResult(body as EnrichmentResult);
   }
 }
 

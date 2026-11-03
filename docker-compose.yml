@@ -21,6 +21,7 @@ services:
       target: prod
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      WEBHOOK_TOKEN: ${WEBHOOK_TOKEN:?copy .env.example to .env}
     ports:
       - "3000:3000"
     depends_on:
